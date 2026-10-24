@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>theGlobe - Autenticação</title>
+    
+    <!-- Fontes do Google -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Folhas de Estilo -->
+    <link rel="stylesheet" href="src/css/global.css">
+    <link rel="stylesheet" href="src/css/auth.css">
+</head>
+<body>
+    <main class="auth-container">
+        
+        <!-- Lado Esquerdo - Área Visual -->
+        <section class="visual-section">
+            
+            <!-- Globo com Vetores e Animação CSS -->
+            <div class="globe-graphic">
+                <div class="globe-glow"></div>
+                
+                <!-- Estrutura Vetorial do Globo -->
+                <svg viewBox="0 0 200 200" class="globe-svg" xmlns="http://www.w3.org/2000/svg">
+                    <circle class="globe-outline" cx="100" cy="100" r="98" fill="none" stroke="rgba(157, 78, 221, 0.5)" stroke-width="0.8"/>
+                    
+                    <ellipse class="meridian m1" cx="100" cy="100" rx="45" ry="98" fill="none" stroke="rgba(157, 78, 221, 0.35)" stroke-width="0.8"/>
+                    <ellipse class="meridian m2" cx="100" cy="100" rx="75" ry="98" fill="none" stroke="rgba(157, 78, 221, 0.25)" stroke-width="0.8"/>
+                    <path class="meridian m3" d="M 100 2 L 100 198" stroke="rgba(157, 78, 221, 0.45)" stroke-width="0.8" fill="none" />
+                    
+                    <ellipse class="parallel p1" cx="100" cy="100" rx="98" ry="30" fill="none" stroke="rgba(157, 78, 221, 0.3)" stroke-width="0.8"/>
+                    <ellipse class="parallel p2" cx="100" cy="100" rx="98" ry="65" fill="none" stroke="rgba(157, 78, 221, 0.2)" stroke-width="0.8"/>
+                    <path class="parallel p3" d="M 2 100 L 198 100" stroke="rgba(157, 78, 221, 0.4)" stroke-width="0.8" fill="none" />
+                </svg>
+
+                <!-- Pontos em Órbita -->
+                <div class="orbit-path path-1"><div class="orbit-dot"></div></div>
+                <div class="orbit-path path-2"><div class="orbit-dot"></div></div>
+                <div class="orbit-path path-3"><div class="orbit-dot"></div></div>
+            </div>
+            
+            <h1 class="brand-title">theGlobe</h1>
+            
+            <p class="brand-subtitle" id="brand-subtitle">
+                Junte-se à comunidade. Crie personagens,<br>
+                entre em salas e co-escreva histórias<br>
+                inesquecíveis.
+            </p>
+        </section>
+
+        <!-- Lado Direito - Formulários -->
+        <section class="form-section">
+            
+            <!-- Formulário de CADASTRO -->
+            <div class="form-wrapper" id="register-container">
+                <div class="form-header">
+                    <h2>Criar conta</h2>
+                    <p>Que comece o espetáculo!</p>
+                </div>
+
+                <form id="register-form" onsubmit="event.preventDefault();">
+                    <div class="input-group">
+                        <label for="reg-name">COMO DESEJA SE CHAMAR</label>
+                        <input type="text" id="reg-name" placeholder="theGlober" required>
+                    </div>
+                    
+                    <div class="input-group">
+                        <label for="reg-email">E-MAIL</label>
+                        <input type="email" id="reg-email" placeholder="seu@email.com" required>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="reg-password">SENHA</label>
+                        <div class="password-input-wrapper">
+                            <input type="password" id="reg-password" placeholder="Min. 8 caracteres" required>
+                            <button type="button" class="toggle-password-btn" aria-label="Mostrar ou ocultar senha">
+                                <svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path class="eye-shape" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                    <circle class="eye-pupil" cx="12" cy="12" r="3"></circle>
+                                    <line class="eye-slash" x1="2" y1="2" x2="22" y2="22"></line>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="reg-confirm-password">CONFIRMAR SENHA</label>
+                        <div class="password-input-wrapper">
+                            <input type="password" id="reg-confirm-password" placeholder="Repita a senha" required>
+                            <button type="button" class="toggle-password-btn" aria-label="Mostrar ou ocultar senha">
+                                <svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path class="eye-shape" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                    <circle class="eye-pupil" cx="12" cy="12" r="3"></circle>
+                                    <line class="eye-slash" x1="2" y1="2" x2="22" y2="22"></line>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn-primary" id="btn-register">Criar conta</button>
+                </form>
+                
+                <div class="divider"><span>ou</span></div>
+                
+                <button class="btn-google" id="btn-google-register">
+                    <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Ícone do Google" width="18">
+                    Continuar com Google
+                </button>
+
+                <div class="toggle-form">
+                    Já tem conta? <a href="#" id="link-to-login">Entrar</a>
+                </div>
+            </div>
+
+            <!-- Formulário de LOGIN (Inicia oculto) -->
+            <div class="form-wrapper hidden" id="login-container">
+                <div class="form-header">
+                    <h2>Bem-vindo de volta</h2>
+                    <p>Entre com sua conta para continuar</p>
+                </div>
+
+                <form id="login-form" onsubmit="event.preventDefault();">
+                    <div class="input-group">
+                        <label for="login-email">E-MAIL</label>
+                        <input type="email" id="login-email" placeholder="seu@email.com" required>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="login-password">SENHA</label>
+                        <div class="password-input-wrapper">
+                            <input type="password" id="login-password" placeholder="••••••••" required>
+                            <button type="button" class="toggle-password-btn" aria-label="Mostrar ou ocultar senha">
+                                <svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path class="eye-shape" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                    <circle class="eye-pupil" cx="12" cy="12" r="3"></circle>
+                                    <line class="eye-slash" x1="2" y1="2" x2="22" y2="22"></line>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="forgot-password">
+                        <a href="#" id="link-forgot-password">Esqueci minha senha</a>
+                    </div>
+
+                    <button type="submit" class="btn-primary" id="btn-login">Entrar</button>
+                </form>
+                
+                <div class="divider"><span>ou</span></div>
+                
+                <button class="btn-google" id="btn-google-login">
+                    <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Ícone do Google" width="18">
+                    Continuar com Google
+                </button>
+
+                <div class="toggle-form">
+                    Não tem conta? <a href="#" id="link-to-register">Criar conta</a>
+                </div>
+            </div>
+
+        </section>
+    </main>
+
+    <script type="module" src="src/js/auth/auth.js"></script>
+</body>
+</html>

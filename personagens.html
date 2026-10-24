@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>theGlobe - Carteira de Personagens</title>
+    <link rel="stylesheet" href="src/css/personagens.css">
+</head>
+<body>
+    <div class="app-container">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">the<span>Globe</span></div>
+                <button class="menu-toggle" id="menu-toggle">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                </button>
+            </div>
+
+            <div class="user-card">
+                <div class="avatar-wrapper">
+                    <img id="sidebar-avatar" src="https://i.pravatar.cc/150?img=20" alt="Avatar">
+                    <span class="status-dot"></span>
+                </div>
+                <div class="user-info">
+                    <h4 id="sidebar-name">Mariana Costa</h4>
+                    <span id="sidebar-email">mariana.costa@email.com</span>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <span class="nav-label">MENU</span>
+                <a href="rooms.html" class="nav-item">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+                    Minhas salas
+                </a>
+                <a href="personagens.html" class="nav-item active">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                    Carteira de personagens
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                theGlobe v1.0.0-prototype
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="content-header">
+                <div class="header-titles">
+                    <h1>Carteira de personagens</h1>
+                    <p id="character-count">0 personagens criados</p>
+                </div>
+                <button class="btn-primary" id="btn-create-character">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    Criar personagem
+                </button>
+            </header>
+
+            <section class="character-grid" id="character-grid">
+            </section>
+        </main>
+    </div>
+
+    <div class="modal-overlay hidden" id="modal-personagem">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="modal-title">Criar personagem</h2>
+                <button class="btn-close" id="btn-close-modal">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+
+            <form id="form-personagem" class="modal-body">
+                <input type="hidden" id="char-id-input" value="">
+
+                <div class="form-group">
+                    <label class="form-label">FOTO DO PERSONAGEM</label>
+                    <div class="upload-dropzone" id="upload-dropzone">
+                        <input type="file" id="input-avatar-file" accept="image/*" hidden>
+                        <div class="dropzone-content" id="dropzone-content">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                            <span class="dropzone-title">Clique ou arraste</span>
+                            <span class="dropzone-sub">Quadrado recomendado (1:1)</span>
+                        </div>
+                        <img id="avatar-preview" class="avatar-preview hidden" src="" alt="Preview">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">NOME DO PERSONAGEM</label>
+                    <input type="text" id="input-char-name" class="form-input" placeholder="Ex: Elara Sombria" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">DESCRIÇÃO</label>
+                    <textarea id="input-char-desc" class="form-textarea" placeholder="Descreva o histórico, personalidade e motivações do personagem..."></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">COR DO PERSONAGEM</label>
+                    <div class="color-palette" id="color-palette">
+                    </div>
+                    <div class="selected-color-badge">
+                        <span class="badge-dot" id="badge-color-dot"></span>
+                        <span id="badge-color-hex">#9B30FF</span>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" id="btn-cancel-modal">Cancelar</button>
+                    <button type="submit" class="btn-primary-modal" id="btn-save-char">Salvar personagem</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script type="module" src="src/js/personagens/personagens.js"></script>
+</body>
+</html>

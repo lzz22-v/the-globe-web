@@ -1,0 +1,303 @@
+/* =========================================
+   VARIÁVEIS GLOBAIS E CORES
+========================================= */
+:root {
+    /* Paleta de Cores Baseada no Protótipo */
+    --bg-dark: #0d0d12;        /* Fundo principal esquerdo */
+    --bg-panel: #14151f;       /* Fundo do painel / cards */
+    --primary-purple: #a855f7;  /* Roxo principal dos botões e links */
+    --primary-hover: #7c3aed;   /* Roxo escuro para hover */
+    
+    /* Textos e Bordas */
+    --text-light: #ffffff;
+    --text-muted: #8a8d9b;
+    --input-bg: #1a1c23;
+    --border-color: #1f202d;
+    
+    /* Fontes */
+    --font-main: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* =========================================
+   RESETS GLOBAIS
+========================================= */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body, html {
+    width: 100%;
+    height: 100vh;
+    font-family: var(--font-main);
+    background-color: var(--bg-dark);
+    color: var(--text-light);
+    overflow: hidden; /* Evita rolagem indesejada na tela de auth/app */
+}
+
+a {
+    color: var(--primary-purple);
+    text-decoration: none;
+    transition: color 0.3s ease;
+}
+
+a:hover {
+    color: var(--primary-hover);
+}
+
+button {
+    font-family: var(--font-main);
+}
+
+/* Classe utilitária para ocultar elementos */
+.hidden {
+    display: none !important;
+}
+
+/* =========================================
+   SPLASH SCREEN (TELA DE CARREGAMENTO INICIAL)
+========================================= */
+.splash-screen {
+    position: fixed;
+    inset: 0;
+    background-color: var(--bg-dark);
+    z-index: 10000; /* Fica acima de absolutamente tudo */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.6s ease-out, visibility 0.6s ease-out;
+}
+
+.splash-screen.hidden {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.splash-logo {
+    font-size: 3.5rem;
+    font-weight: 800;
+    color: var(--primary-purple);
+    letter-spacing: -1px;
+    animation: pulse 2s infinite ease-in-out;
+}
+
+@keyframes pulse {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.05); opacity: 0.7; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+/* =========================================
+   LAYOUT PRINCIPAL (Sidebar + Main)
+========================================= */
+.app-layout,
+.app-container {
+    display: flex;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background-color: var(--bg-dark);
+}
+
+/* =========================================
+   BARRA LATERAL (SIDEBAR)
+========================================= */
+.sidebar {
+    width: 260px;
+    min-width: 260px;
+    height: 100vh;
+    background-color: #0b0c10;
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    padding: 1.25rem 1rem;
+    box-sizing: border-box;
+    flex-shrink: 0;
+    justify-content: space-between;
+}
+
+.sidebar-top {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.sidebar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 0.25rem;
+    margin-bottom: 0.5rem;
+}
+
+.brand-logo,
+.logo {
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: var(--primary-purple);
+    letter-spacing: -0.5px;
+}
+
+.menu-toggle,
+.btn-menu-toggle {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+/* Card / Perfil de Usuário na Sidebar */
+.sidebar-user-card,
+.user-profile {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background-color: var(--bg-panel);
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    margin: 10px 0 20px 0;
+    transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.sidebar-user-card:hover,
+.user-profile:hover {
+    border-color: rgba(168, 85, 247, 0.4);
+}
+
+.user-avatar-small,
+.avatar-wrapper {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+}
+
+/* Trava a imagem do avatar para não estourar a tela */
+.avatar, 
+#sidebar-avatar,
+.user-avatar-small img {
+    width: 36px !important;
+    height: 36px !important;
+    max-width: 36px !important;
+    max-height: 36px !important;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.status-dot {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid var(--bg-panel);
+}
+
+.status-dot.online {
+    background-color: #4ade80;
+}
+
+/* Ajustes dos textos do usuário */
+.user-info,
+.user-info-small {
+    overflow: hidden;
+}
+
+.user-info h3,
+.user-info-small h3 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-light);
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.user-info p,
+.user-info-small p {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Navegação da Sidebar */
+.sidebar-nav,
+.menu {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex-grow: 1;
+}
+
+.nav-label,
+.menu-label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    letter-spacing: 1px;
+    padding: 0 0.5rem;
+}
+
+.nav-item,
+.menu-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 0.85rem;
+    text-decoration: none;
+    transition: all 0.2s ease;
+}
+
+.nav-item:hover,
+.menu-item:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: var(--text-light);
+}
+
+.nav-item.active,
+.menu-item.active {
+    background-color: rgba(168, 85, 247, 0.15);
+    color: #c084fc;
+    border-left: 3px solid var(--primary-purple);
+}
+
+.nav-item.active svg,
+.menu-item.active svg {
+    color: var(--primary-purple);
+}
+
+.sidebar-footer,
+.version {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-align: left;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+}
+
+/* =========================================
+   ÁREA PRINCIPAL (MAIN CONTENT)
+========================================= */
+.main-content {
+    flex-grow: 1;
+    padding: 2.5rem 3rem;
+    overflow-y: auto;
+    background-color: var(--bg-dark);
+}
