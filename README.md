@@ -11,11 +11,18 @@
 </p>
 
 <p align="center">
+  <a href="https://theglobe0.netlify.app/">
+    <img alt="Acessar theGlobe" src="https://img.shields.io/badge/ACESSAR_O_SITE-a855f7?style=for-the-badge&logo=googlechrome&logoColor=white">
+  </a>
+</p>
+
+<p align="center">
   <b>Aplicação web para criar salas de conversa e encenação, organizar personagens e compartilhar mídia com os participantes.</b><br>
   Interface em português · Aplicação estática · Supabase para Auth, banco, arquivos e tempo real
 </p>
 
 <p align="center">
+  <a href="https://theglobe0.netlify.app/">Site</a> ·
   <a href="#-destaques">Destaques</a> ·
   <a href="#-telas-e-funcionalidades">Telas</a> ·
   <a href="#-como-funciona-uma-sala">Salas</a> ·
@@ -157,7 +164,6 @@ O cliente está em `src/js/config/supabase.js`. O projeto usa:
 | **Postgres** | Salas, membros, solicitações, mensagens, personagens e pastas |
 | **Storage** | Avatares, capas, wallpapers e vídeos das salas |
 | **Realtime** | Presença, digitação, novas mensagens, personagens, notificações de entrada e estado da mídia |
-
 
 ### Tabelas e recursos usados pelo cliente
 
