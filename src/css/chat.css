@@ -339,36 +339,11 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 1.5rem;
+    gap: 1.25rem;
     background-color: #13141a;
     background-image: linear-gradient(rgba(19, 20, 26, 0.90), rgba(19, 20, 26, 0.90)), url('../img/chat-bg.jpg');
     background-size: cover;
     background-position: center;
-    scrollbar-width: thin;
-    scrollbar-color: #6b3a91 #171820;
-}
-
-.chat-messages::-webkit-scrollbar {
-    width: 10px;
-}
-
-.chat-messages::-webkit-scrollbar-track {
-    background: rgba(17, 18, 22, 0.72);
-    border-left: 1px solid rgba(47, 51, 77, 0.55);
-}
-
-.chat-messages::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, #9d4edd, #6b3a91);
-    border: 2px solid #171820;
-    border-radius: 999px;
-}
-
-.chat-messages::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(180deg, #b56bea, #8b5cf6);
-}
-
-.chat-messages::-webkit-scrollbar-corner {
-    background: #171820;
 }
 
 .message {
@@ -651,6 +626,57 @@
     flex-shrink: 0;
 }
 
+.message-context-menu .context-menu-item {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    font: inherit;
+}
+
+.message-bubble { user-select: text; }
+.message-bubble.is-deleted {
+    color: #a1a1aa !important;
+    background: #20212a !important;
+    border: 1px solid #343541 !important;
+    font-style: italic;
+}
+
+.message-reply-reference {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-width: 100%;
+    margin-bottom: 5px;
+    padding: 7px 10px;
+    border: 0;
+    border-left: 2px solid #a855f7;
+    border-radius: 4px;
+    background: rgba(124, 58, 237, 0.12);
+    color: #d4d4d8;
+    text-align: left;
+    cursor: pointer;
+}
+
+.message-reply-reference strong { color: #c084fc; font-size: 11px; }
+.message-reply-reference span { overflow: hidden; color: #a1a1aa; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.message-reply-highlight .message-bubble { outline: 2px solid #a855f7; outline-offset: 3px; }
+
+.reply-composer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 14px;
+    border-left: 3px solid #a855f7;
+    background: #191a23;
+}
+
+.reply-composer > div { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.reply-composer strong { color: #c084fc; font-size: 12px; }
+.reply-composer span { overflow: hidden; color: #a1a1aa; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.reply-composer button { border: 0; background: transparent; color: #a1a1aa; font-size: 20px; cursor: pointer; }
+
 /* ==========================================
    ESTADOS DE PERSONAGENS (LIVRE E OCUPADO)
 ========================================== */
@@ -876,6 +902,35 @@
     text-align: center;
     font-weight: 500;
 }
+
+.room-wallet-folder-heading,
+.room-wallet-empty,
+.room-wallet-back-button { grid-column: 1 / -1; }
+.room-wallet-folder-heading { margin: 4px 0; color: #e4e4e7; font-size: 0.9rem; font-weight: 600; }
+.room-wallet-empty { padding: 24px 12px; color: #a1a1aa; text-align: center; }
+.room-wallet-back-button { justify-self: start; border: 0; background: transparent; color: #c084fc; font-weight: 600; cursor: pointer; }
+.room-wallet-folder-card {
+    min-height: 126px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 14px;
+    border: 1px solid #343044;
+    border-radius: 12px;
+    background: #191722;
+    color: #f4f4f5;
+    text-align: left;
+    cursor: pointer;
+}
+.room-wallet-folder-card:hover { border-color: #9333ea; background: #21192d; }
+.room-wallet-folder-card strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-wallet-folder-card small { color: #a1a1aa; }
+.room-wallet-folder-icon { color: #c084fc; }
+.room-wallet-folder-icon svg { width: 26px; height: 26px; }
+.room-wallet-character-name { max-width: 100%; margin-bottom: 8px; overflow: hidden; color: #fff; font-size: 0.88rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.room-wallet-character-toggle { width: 100%; padding: 7px; border: 1px solid transparent; border-radius: 8px; background: rgba(147, 51, 234, 0.15); color: #c084fc; font-size: 0.78rem; font-weight: 600; cursor: pointer; }
+.room-wallet-character-toggle.selected { border-color: #9333ea; background: rgba(147, 51, 234, 0.25); color: #fff; }
 
 .modal-footer-right {
     display: flex;

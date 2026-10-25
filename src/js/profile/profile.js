@@ -16,6 +16,11 @@ const profileBanner = document.getElementById('profile-banner');
 const bannerColorPicker = document.getElementById('banner-color-picker');
 
 const btnLogout = document.getElementById('btn-logout');
+const btnChangeUsername = document.getElementById('btn-change-username');
+const usernameModal = document.getElementById('username-modal');
+const usernameForm = document.getElementById('username-form');
+const usernameInput = document.getElementById('username-input');
+const btnCancelUsername = document.getElementById('btn-cancel-username');
 
 const welcomeModal = document.getElementById('welcome-modal');
 const btnCloseWelcome = document.getElementById('btn-close-welcome');
@@ -87,16 +92,16 @@ btnCloseAlert.addEventListener('click', () => {
 async function fetchUserStats(userId) {
     try {
         // Busca apenas a quantidade exata de salas (muito mais rápido do que buscar os dados inteiros)
-        const { count: roomsCount, error: roomsError } = await supabase
+        const { data: userRooms, error: roomsError } = await supabase
             .from('rooms')
-            .select('*', { count: 'exact', head: true })
+            .select('id')
             .eq('created_by', userId);
 
         if (roomsError) throw roomsError;
 
         // Se o elemento statRooms existir no HTML, atualiza com o número do banco
         if (statRooms) {
-            statRooms.textContent = roomsCount || 0;
+            statRooms.textContent = userRooms?.length || 0;
         }
 
     } catch (error) {
@@ -140,6 +145,7 @@ async function initProfile() {
     }
 
     // Chama a função que busca o número de salas
+    if (statRooms) statRooms.textContent = '…';
     await fetchUserStats(user.id);
 }
 
@@ -235,3 +241,47 @@ btnLogout.addEventListener('click', async () => {
 });
 
 initProfile();
+
+function openUsernameModal() {
+    usernameInput.value = mainProfileName.textContent.trim();
+    usernameModal.classList.remove('hidden');
+    usernameInput.focus();
+    usernameInput.select();
+}
+
+function closeUsernameModal() {
+    usernameModal.classList.add('hidden');
+}
+
+btnChangeUsername.addEventListener('click', openUsernameModal);
+btnCancelUsername.addEventListener('click', closeUsernameModal);
+usernameModal.addEventListener('click', event => {
+    if (event.target === usernameModal) closeUsernameModal();
+});
+
+usernameForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const name = usernameInput.value.trim();
+    if (name.length < 2 || name.length > 40) {
+        showAlert('Nome inválido', 'Use um nome entre 2 e 40 caracteres.', 'error');
+        return;
+    }
+
+    showLoading('Salvando nome de usuário...');
+    const { data, error } = await supabase.auth.updateUser({
+        data: { full_name: name, name }
+    });
+    hideLoading();
+
+    if (error) {
+        console.error('Erro ao alterar nome de usuário:', error);
+        showAlert('Não foi possível salvar', 'Tente novamente em alguns instantes.', 'error');
+        return;
+    }
+
+    const savedName = data.user?.user_metadata?.full_name || name;
+    sidebarName.textContent = savedName;
+    mainProfileName.textContent = savedName;
+    closeUsernameModal();
+    showAlert('Nome atualizado', 'Seu novo nome já está salvo no perfil.');
+});

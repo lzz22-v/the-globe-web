@@ -11,6 +11,17 @@ const PALETTE_COLORS = [
 const grid = document.getElementById('character-grid');
 const characterCount = document.getElementById('character-count');
 const btnCreate = document.getElementById('btn-create-character');
+const btnCreateFolder = document.getElementById('btn-create-folder');
+const btnBackFolders = document.getElementById('btn-back-folders');
+const btnRenameFolder = document.getElementById('btn-rename-folder');
+const btnDeleteFolder = document.getElementById('btn-delete-folder');
+const currentFolderTitle = document.getElementById('current-folder-title');
+const folderSelect = document.getElementById('input-char-folder');
+const folderModal = document.getElementById('modal-folder');
+const folderModalTitle = document.getElementById('folder-modal-title');
+const folderForm = document.getElementById('form-folder');
+const folderIdInput = document.getElementById('folder-id-input');
+const folderNameInput = document.getElementById('input-folder-name');
 
 // Mapeamento dos elementos do Modal
 const modalOverlay = document.getElementById('modal-personagem');
@@ -33,9 +44,12 @@ const badgeColorDot = document.getElementById('badge-color-dot');
 const badgeColorHex = document.getElementById('badge-color-hex');
 
 let characters = [];
+let folders = [];
 let currentUser = null;
+let currentFolderId = null;
 let selectedColor = PALETTE_COLORS[0];
 let currentAvatarBase64 = null;
+const UNFILED_FOLDER = '__unfiled__';
 
 // ==========================================
 // 1. INICIALIZAÇÃO E AUTENTICAÇÃO
@@ -61,7 +75,24 @@ async function init() {
 
     renderPalette();
     setupDropzone();
+    await loadFolders();
     await loadCharacters();
+}
+
+async function loadFolders() {
+    const { data, error } = await supabase
+        .from('character_folders')
+        .select('id, name, created_at')
+        .eq('user_id', currentUser.id)
+        .order('created_at', { ascending: true });
+
+    if (error) {
+        console.error('Erro ao carregar pastas de personagens:', error);
+        folders = [];
+        return;
+    }
+
+    folders = data || [];
 }
 
 // ==========================================
@@ -81,6 +112,7 @@ async function loadCharacters() {
 
     characters = (data || []).map(c => ({
         id: c.id,
+        folderId: c.folder_id || null,
         name: c.name,
         description: c.description || '',
         color: c.color || PALETTE_COLORS[0],
@@ -216,8 +248,28 @@ function openModal(char = null) {
         resetDropzone();
     }
 
+    const defaultFolderId = char?.folderId || (currentFolderId && currentFolderId !== UNFILED_FOLDER ? currentFolderId : '');
+    renderFolderSelect(defaultFolderId);
     renderPalette();
     modalOverlay.classList.remove('hidden');
+}
+
+function renderFolderSelect(selectedFolderId = '') {
+    if (!folderSelect) return;
+    folderSelect.replaceChildren();
+
+    const unfiledOption = document.createElement('option');
+    unfiledOption.value = '';
+    unfiledOption.textContent = 'Sem pasta';
+    folderSelect.appendChild(unfiledOption);
+
+    folders.forEach(folder => {
+        const option = document.createElement('option');
+        option.value = folder.id;
+        option.textContent = folder.name;
+        folderSelect.appendChild(option);
+    });
+    folderSelect.value = selectedFolderId || '';
 }
 
 function closeModal() {
@@ -233,6 +285,76 @@ if (modalOverlay) {
         if (e.target === modalOverlay) closeModal();
     });
 }
+
+function openFolderModal(folder = null) {
+    folderIdInput.value = folder?.id || '';
+    folderModalTitle.textContent = folder ? 'Renomear pasta' : 'Criar pasta';
+    folderNameInput.value = folder?.name || '';
+    folderModal.classList.remove('hidden');
+    folderNameInput.focus();
+}
+
+function closeFolderModal() {
+    folderModal.classList.add('hidden');
+    folderForm.reset();
+}
+
+if (btnCreateFolder) btnCreateFolder.addEventListener('click', () => openFolderModal());
+if (btnBackFolders) btnBackFolders.addEventListener('click', () => {
+    currentFolderId = null;
+    renderCharacters();
+});
+if (btnRenameFolder) btnRenameFolder.addEventListener('click', () => {
+    const folder = folders.find(item => item.id === currentFolderId);
+    if (folder) openFolderModal(folder);
+});
+if (btnDeleteFolder) btnDeleteFolder.addEventListener('click', async () => {
+    const folder = folders.find(item => item.id === currentFolderId);
+    if (!folder || !confirm(`Excluir a pasta “${folder.name}”? Os personagens serão mantidos em “Sem pasta”.`)) return;
+
+    const { error } = await supabase
+        .from('character_folders')
+        .delete()
+        .eq('id', folder.id)
+        .eq('user_id', currentUser.id);
+
+    if (error) {
+        console.error('Erro ao excluir pasta:', error);
+        alert('Não foi possível excluir a pasta.');
+        return;
+    }
+
+    currentFolderId = null;
+    await loadFolders();
+    await loadCharacters();
+});
+
+document.getElementById('btn-close-folder-modal')?.addEventListener('click', closeFolderModal);
+document.getElementById('btn-cancel-folder-modal')?.addEventListener('click', closeFolderModal);
+if (folderModal) folderModal.addEventListener('click', event => {
+    if (event.target === folderModal) closeFolderModal();
+});
+
+if (folderForm) folderForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const id = folderIdInput.value;
+    const name = folderNameInput.value.trim();
+    if (!name) return;
+
+    const query = id
+        ? supabase.from('character_folders').update({ name }).eq('id', id).eq('user_id', currentUser.id)
+        : supabase.from('character_folders').insert({ user_id: currentUser.id, name });
+    const { error } = await query;
+    if (error) {
+        console.error('Erro ao salvar pasta:', error);
+        alert(error.code === '23505' ? 'Você já tem uma pasta com esse nome.' : 'Não foi possível salvar a pasta.');
+        return;
+    }
+
+    await loadFolders();
+    renderCharacters();
+    closeFolderModal();
+});
 
 // ==========================================
 // 6. SALVAR PERSONAGEM (SUBMIT DO FORM NO SUPABASE)
@@ -258,7 +380,8 @@ formPersonagem.addEventListener('submit', async (e) => {
                 description: description,
                 color: selectedColor,
                 avatar_url: avatarUrl,
-                initials: avatarUrl ? null : initials
+                initials: avatarUrl ? null : initials,
+                folder_id: folderSelect?.value || null
             })
             .eq('id', id)
             .eq('user_id', currentUser.id);
@@ -278,7 +401,8 @@ formPersonagem.addEventListener('submit', async (e) => {
                 description: description || 'Sem descrição informada.',
                 color: selectedColor,
                 avatar_url: avatarUrl,
-                initials: avatarUrl ? null : initials
+                initials: avatarUrl ? null : initials,
+                folder_id: folderSelect?.value || null
             });
 
         if (error) {
@@ -297,21 +421,60 @@ formPersonagem.addEventListener('submit', async (e) => {
 // ==========================================
 function renderCharacters() {
     grid.innerHTML = '';
+    const isRoot = currentFolderId === null;
+    const isUnfiled = currentFolderId === UNFILED_FOLDER;
+    const activeFolder = folders.find(folder => folder.id === currentFolderId);
+    const visibleCharacters = isRoot
+        ? []
+        : characters.filter(character => isUnfiled ? !character.folderId : character.folderId === currentFolderId);
+
+    if (btnBackFolders) btnBackFolders.classList.toggle('hidden', isRoot);
+    if (btnRenameFolder) btnRenameFolder.classList.toggle('hidden', isRoot || isUnfiled || !activeFolder);
+    if (btnDeleteFolder) btnDeleteFolder.classList.toggle('hidden', isRoot || isUnfiled || !activeFolder);
+    if (btnCreateFolder) btnCreateFolder.classList.toggle('hidden', !isRoot);
+    if (currentFolderTitle) currentFolderTitle.textContent = isRoot ? 'Pastas da carteira' : (isUnfiled ? 'Sem pasta' : activeFolder?.name || 'Pasta');
+
     if (characterCount) {
-        characterCount.textContent = `${characters.length} personagem${characters.length !== 1 ? 's' : ''} criado${characters.length !== 1 ? 's' : ''}`;
+        characterCount.textContent = isRoot
+            ? `${folders.length} pasta${folders.length !== 1 ? 's' : ''} · ${characters.length} personagem${characters.length !== 1 ? 's' : ''}`
+            : `${visibleCharacters.length} personagem${visibleCharacters.length !== 1 ? 's' : ''}`;
     }
 
-    if (characters.length === 0) {
-        grid.innerHTML = '<p style="color: #a1a1aa; grid-column: 1/-1; text-align: center; padding: 40px 0;">Nenhum personagem cadastrado na sua carteira. Clique em "+ Criar personagem" para começar!</p>';
+    if (isRoot) {
+        folders.forEach(folder => {
+            const count = characters.filter(character => character.folderId === folder.id).length;
+            const card = createFolderCard(folder.name, count, () => {
+                currentFolderId = folder.id;
+                renderCharacters();
+            });
+            grid.appendChild(card);
+        });
+
+        const unfiledCharacters = characters.filter(character => !character.folderId);
+        if (unfiledCharacters.length) {
+            grid.appendChild(createFolderCard('Sem pasta', unfiledCharacters.length, () => {
+                currentFolderId = UNFILED_FOLDER;
+                renderCharacters();
+            }, true));
+        }
+
+        if (!folders.length && !unfiledCharacters.length) {
+            grid.innerHTML = '<p class="wallet-empty-state">Sua carteira está vazia. Crie uma pasta para organizar os personagens das suas sessões.</p>';
+        }
         return;
     }
 
-    characters.forEach(char => {
+    if (!visibleCharacters.length) {
+        grid.innerHTML = '<p class="wallet-empty-state">Esta pasta ainda não tem personagens. Use “Criar personagem” para adicionar um.</p>';
+        return;
+    }
+
+    visibleCharacters.forEach(char => {
         const card = document.createElement('div');
         card.className = 'char-card';
         card.style.borderTop = `3px solid ${char.color}`;
 
-        let avatarHTML = char.avatar 
+        const avatarHTML = char.avatar
             ? `<img src="${char.avatar}" alt="${char.name}" class="card-avatar" style="border: 2px solid ${char.color}">`
             : `<div class="card-avatar-initials" style="color: ${char.color}; border: 2px solid ${char.color}">${char.initials || char.name.substring(0, 2).toUpperCase()}</div>`;
 
@@ -321,10 +484,7 @@ function renderCharacters() {
                     ${avatarHTML}
                     <div class="card-title-group">
                         <h3>${char.name}</h3>
-                        <span class="color-tag">
-                            <span class="color-dot" style="background-color: ${char.color}"></span>
-                            ${char.color.toUpperCase()}
-                        </span>
+                        <span class="color-tag"><span class="color-dot" style="background-color: ${char.color}"></span>${char.color.toUpperCase()}</span>
                     </div>
                 </div>
                 <p class="card-description">${char.description}</p>
@@ -342,13 +502,25 @@ function renderCharacters() {
 
         card.querySelector('.btn-edit').addEventListener('click', () => openModal(char));
         card.querySelector('.btn-delete').addEventListener('click', () => deleteCharacter(char.id));
-
         grid.appendChild(card);
     });
 }
 
-// ==========================================
-// 8. DELETAR PERSONAGEM
+function createFolderCard(name, count, onOpen, isUnfiled = false) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `folder-card${isUnfiled ? ' unfiled-folder-card' : ''}`;
+    card.innerHTML = `
+        <span class="folder-card-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+        </span>
+        <span class="folder-card-copy"><strong></strong><small>${count} personagem${count !== 1 ? 's' : ''}</small></span>
+        <span class="folder-card-arrow">›</span>
+    `;
+    card.querySelector('strong').textContent = name;
+    card.addEventListener('click', onOpen);
+    return card;
+}
 // ==========================================
 async function deleteCharacter(id) {
     if (!confirm('Deseja excluir este personagem da sua carteira?')) return;

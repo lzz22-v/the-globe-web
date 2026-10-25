@@ -4,7 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>theGlobe - Carteira de Personagens</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="src/css/personagens.css">
+    <link rel="stylesheet" href="src/css/brand.css?v=20261025-brand-2">
+    <link rel="stylesheet" href="src/css/scrollbars.css">
+    <link rel="stylesheet" href="src/css/responsive.css">
 </head>
 <body>
     <div class="app-container">
@@ -56,6 +62,16 @@
                 </button>
             </header>
 
+            <div class="folder-toolbar" id="folder-toolbar">
+                <button type="button" class="folder-nav-button hidden" id="btn-back-folders">← Pastas</button>
+                <strong id="current-folder-title">Suas pastas</strong>
+                <div class="folder-toolbar-actions">
+                    <button type="button" class="btn-secondary" id="btn-create-folder">+ Nova pasta</button>
+                    <button type="button" class="btn-secondary hidden" id="btn-rename-folder">Renomear</button>
+                    <button type="button" class="btn-secondary folder-delete-button hidden" id="btn-delete-folder">Excluir pasta</button>
+                </div>
+            </div>
+
             <section class="character-grid" id="character-grid">
             </section>
         </main>
@@ -92,6 +108,13 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label" for="input-char-folder">PASTA</label>
+                    <select id="input-char-folder" class="form-input">
+                        <option value="">Sem pasta</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">DESCRIÇÃO</label>
                     <textarea id="input-char-desc" class="form-textarea" placeholder="Descreva o histórico, personalidade e motivações do personagem..."></textarea>
                 </div>
@@ -109,6 +132,28 @@
                 <div class="modal-footer">
                     <button type="button" class="btn-secondary" id="btn-cancel-modal">Cancelar</button>
                     <button type="submit" class="btn-primary-modal" id="btn-save-char">Salvar personagem</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="modal-folder">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="folder-modal-title">Criar pasta</h2>
+                <button type="button" class="btn-close" id="btn-close-folder-modal" aria-label="Fechar">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+            <form id="form-folder" class="modal-body">
+                <input type="hidden" id="folder-id-input">
+                <div class="form-group">
+                    <label class="form-label" for="input-folder-name">NOME DA PASTA</label>
+                    <input type="text" id="input-folder-name" class="form-input" maxlength="80" placeholder="Ex: Sessão de inverno" required>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" id="btn-cancel-folder-modal">Cancelar</button>
+                    <button type="submit" class="btn-primary-modal">Salvar pasta</button>
                 </div>
             </form>
         </div>

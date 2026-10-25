@@ -221,6 +221,43 @@ body {
     gap: 20px;
 }
 
+.folder-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: -12px 0 22px;
+}
+
+.folder-toolbar > strong { color: #e5e7eb; font-size: 0.95rem; }
+.folder-toolbar-actions { display: flex; gap: 8px; margin-left: auto; }
+.folder-nav-button { border: 0; background: transparent; color: #c084fc; font-weight: 600; cursor: pointer; }
+.folder-delete-button { color: #f87171; }
+
+.folder-card {
+    min-height: 118px;
+    padding: 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    background: linear-gradient(145deg, #1a1c29, #151722);
+    color: var(--text-white);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.2s, transform 0.2s, background 0.2s;
+}
+
+.folder-card:hover { border-color: #8b30ff; transform: translateY(-2px); background: #1c1929; }
+.folder-card-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 11px; background: rgba(139, 48, 255, 0.16); color: #c084fc; }
+.folder-card-icon svg { width: 23px; height: 23px; }
+.folder-card-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 5px; }
+.folder-card-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-card-copy small { color: var(--text-muted); }
+.folder-card-arrow { color: #8a8f9d; font-size: 1.6rem; }
+.unfiled-folder-card .folder-card-icon { background: rgba(148, 163, 184, 0.12); color: #cbd5e1; }
+.wallet-empty-state { grid-column: 1 / -1; padding: 42px 16px; color: var(--text-muted); text-align: center; }
+
 .char-card {
     background-color: var(--card-bg);
     border: 1px solid var(--card-border);

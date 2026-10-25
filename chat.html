@@ -4,8 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chat - theGlobe</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="src/css/global.css">
     <link rel="stylesheet" href="src/css/chat.css">
+    <link rel="stylesheet" href="src/css/brand.css?v=20261025-brand-2">
+    <link rel="stylesheet" href="src/css/scrollbars.css">
+    <link rel="stylesheet" href="src/css/responsive.css">
 </head>
 <body>
     <!-- SPLASH SCREEN INICIAL -->
@@ -96,7 +102,6 @@
                         </div>
                     </div>
 
-                    <button class="btn-primary" id="btn-add-personagem">+ Personagem</button>
                 </div>
             </header>
 
@@ -118,6 +123,10 @@
             </div>
 
             <footer class="chat-footer">
+                <div class="reply-composer hidden" id="reply-composer">
+                    <div><strong id="reply-composer-name"></strong><span id="reply-composer-text"></span></div>
+                    <button type="button" id="reply-composer-cancel" aria-label="Cancelar resposta">×</button>
+                </div>
                 <div class="input-wrapper">
                     <!-- Avatar escondido inicialmente -->
                     <img src="" alt="Avatar" class="input-avatar hidden" id="input-avatar">

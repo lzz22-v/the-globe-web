@@ -1,5 +1,7 @@
 import { supabase } from '../config/supabase.js';
 
+const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ccc'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E";
+
 // ==========================================
 // 1. ÍCONES VETORIAIS (SVG)
 // ==========================================
@@ -23,7 +25,7 @@ const chatState = {
         id: '',
         name: 'Usuário',
         email: '',
-        avatar: 'https://i.pravatar.cc/150?img=32'
+        avatar: DEFAULT_AVATAR
     },
     roomCharacters: [],
     activeCharacterId: null,
@@ -39,6 +41,8 @@ const chatState = {
     typingCleanupTimer: null,
     lastTypingBroadcastAt: 0,
     pendingMessageBroadcasts: [],
+    replyTarget: null,
+    messagesById: new Map(),
     presenceChannel: null,
     hostUserId: null,
     isHost: false,
@@ -57,7 +61,10 @@ const chatState = {
 };
 
 let userWalletCharacters = [];
+let userWalletFolders = [];
+let activeWalletFolderId = null;
 const selectedWalletCharIds = new Set();
+const UNFILED_WALLET_FOLDER = '__unfiled__';
 
 // ==========================================
 // 3. ELEMENTOS DO DOM
@@ -78,7 +85,6 @@ const chatMessagesContainer = document.getElementById('chat-messages') || docume
 let characterProfileModal = null;
 
 const toggleEncenacao = document.getElementById('toggle-encenacao');
-const btnAddPersonagem = document.getElementById('btn-add-personagem');
 const characterBar = document.getElementById('character-bar');
 const characterList = document.getElementById('character-list');
 const hostMediaControls = document.getElementById('host-media-controls');
@@ -100,6 +106,10 @@ const inputRoleLabel = document.getElementById('input-role-label');
 const chatInput = document.getElementById('chat-input');
 const btnSend = document.getElementById('btn-send');
 const typingIndicator = document.getElementById('typing-indicator');
+const replyComposer = document.getElementById('reply-composer');
+const replyComposerName = document.getElementById('reply-composer-name');
+const replyComposerText = document.getElementById('reply-composer-text');
+const replyComposerCancel = document.getElementById('reply-composer-cancel');
 
 const modalAddRoomChar = document.getElementById('modal-add-room-char');
 const btnCloseRoomCharModal = document.getElementById('btn-close-room-char-modal');
@@ -121,7 +131,7 @@ async function initChat() {
     chatState.currentUser.id = session.user.id;
     chatState.currentUser.name = metadata?.full_name || metadata?.name || 'Usuário';
     chatState.currentUser.email = session.user.email || '';
-    chatState.currentUser.avatar = metadata?.avatar_url || "https://i.pravatar.cc/150?img=32";
+    chatState.currentUser.avatar = metadata?.avatar_url || DEFAULT_AVATAR;
 
     if (sidebarName) sidebarName.textContent = chatState.currentUser.name;
     if (sidebarEmail) sidebarEmail.textContent = chatState.currentUser.email;
@@ -253,7 +263,7 @@ function updatePresenceUI() {
             if (user.avatar) {
                 avatarEl.innerHTML = `<img src="${user.avatar}" alt="${user.name}" style="width:100%; height:100%; object-fit:cover;">`;
             } else {
-                avatarEl.textContent = user.name.substring(0, 2).toUpperCase();
+                avatarEl.innerHTML = ICONS.user;
             }
 
             roomMembersAvatars.appendChild(avatarEl);
@@ -625,15 +635,29 @@ async function syncRoomCharacters() {
 }
 
 async function fetchUserWalletCharacters() {
-    const { data, error } = await supabase
+    const [{ data: folderData, error: folderError }, { data, error }] = await Promise.all([
+        supabase
+            .from('character_folders')
+            .select('id, name')
+            .eq('user_id', chatState.currentUser.id)
+            .order('created_at', { ascending: true }),
+        supabase
         .from('characters')
         .select('*')
-        .eq('user_id', chatState.currentUser.id);
+        .eq('user_id', chatState.currentUser.id)
+    ]);
 
+    if (folderError) {
+        console.error('Erro ao carregar pastas da carteira:', folderError);
+        userWalletFolders = [];
+    } else {
+        userWalletFolders = folderData || [];
+    }
     if (error) return;
 
     userWalletCharacters = (data || []).map(c => ({
         id: c.id,
+        folderId: c.folder_id || null,
         name: c.name,
         avatar: c.avatar_url,
         initials: c.initials || c.name.substring(0, 2).toUpperCase(),
@@ -644,27 +668,74 @@ async function fetchUserWalletCharacters() {
 // ==========================================
 // 5. CARREGAR E RENDERIZAR MENSAGENS
 // ==========================================
+const MESSAGE_BASE_SELECT = `
+    id, content, created_at, user_id, is_encenacao,
+    characters ( id, name, avatar_url, color, initials )
+`;
+const MESSAGE_FEATURE_SELECT = `
+    id, content, created_at, user_id, is_encenacao, reply_to_id, deleted_at,
+    characters ( id, name, avatar_url, color, initials )
+`;
+
+function isOptionalMessageSchemaError(error) {
+    const details = `${error?.code || ''} ${error?.message || ''} ${error?.details || ''}`.toLowerCase();
+    return /42703|pgrst200|pgrst204|reply_to_id|deleted_at|relationship.*messages|schema cache/.test(details);
+}
+
+async function queryRoomMessages(since = null) {
+    const runQuery = async select => {
+        let query = supabase
+            .from('messages')
+            .select(select)
+            .eq('room_id', chatState.roomId);
+        if (since) query = query.gte('created_at', since);
+        return query.order('created_at', { ascending: true });
+    };
+
+    let result = await runQuery(MESSAGE_FEATURE_SELECT);
+    if (result.error && isOptionalMessageSchemaError(result.error)) {
+        console.warn('Campos de resposta/exclusão ainda não disponíveis; carregando mensagens sem esses recursos.');
+        result = await runQuery(MESSAGE_BASE_SELECT);
+    }
+    return result;
+}
+
+async function hydrateMessageReplies(messages) {
+    if (!messages?.length) return;
+
+    const messageById = new Map(chatState.messagesById);
+    messages.forEach(message => {
+        if (message.id) messageById.set(String(message.id), message);
+    });
+    const missingReplyIds = [...new Set(messages
+        .map(message => message.reply_to_id)
+        .filter(id => id && !messageById.has(String(id))))];
+
+    if (missingReplyIds.length) {
+        const { data, error } = await supabase
+            .from('messages')
+            .select('id, content, user_id, deleted_at')
+            .in('id', missingReplyIds);
+        if (error) console.error('Não foi possível carregar as mensagens respondidas:', error);
+        (data || []).forEach(message => messageById.set(String(message.id), message));
+    }
+
+    messages.forEach(message => {
+        if (message.reply_to_id) message.reply = messageById.get(String(message.reply_to_id)) || null;
+    });
+}
+
 async function fetchMessages() {
     if (!chatMessagesContainer) return;
 
-    const { data, error } = await supabase
-        .from('messages')
-        .select(`
-            id,
-            content,
-            created_at,
-            user_id,
-            is_encenacao,
-            characters ( id, name, avatar_url, color, initials )
-        `)
-        .eq('room_id', chatState.roomId)
-        .order('created_at', { ascending: true });
+    const { data, error } = await queryRoomMessages();
 
     if (error) {
         console.error("Erro ao buscar mensagens:", error);
         return;
     }
 
+    await hydrateMessageReplies(data || []);
     renderAllMessages(data || []);
     (data || []).forEach(msg => rememberMessageTimestamp(msg.created_at));
     chatState.messagesLoaded = true;
@@ -686,25 +757,14 @@ async function syncNewMessages() {
 
     // Consulta uma pequena janela anterior para cobrir eventos atrasados; IDs evitam duplicatas.
     const since = new Date(Math.max(0, chatState.latestMessageTimestamp - 5000)).toISOString();
-    const { data, error } = await supabase
-        .from('messages')
-        .select(`
-            id,
-            content,
-            created_at,
-            user_id,
-            is_encenacao,
-            characters ( id, name, avatar_url, color, initials )
-        `)
-        .eq('room_id', chatState.roomId)
-        .gte('created_at', since)
-        .order('created_at', { ascending: true });
+    const { data, error } = await queryRoomMessages(since);
 
     if (error) {
         console.error('Erro ao sincronizar mensagens recentes:', error);
         return;
     }
 
+    await hydrateMessageReplies(data || []);
     (data || []).forEach(appendMessageToUI);
 }
 
@@ -740,19 +800,22 @@ function escapeHtml(value) {
 
 function appendMessageToUI(msg) {
     if (!chatMessagesContainer) return;
+    if (msg.id) chatState.messagesById.set(String(msg.id), msg);
     if (msg.id && Array.from(chatMessagesContainer.children).some(element => element.dataset.messageId === String(msg.id))) return;
     rememberMessageTimestamp(msg.created_at);
 
     const isMine = msg.user_id === chatState.currentUser.id;
     const time = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const char = msg.characters;
+    const isDeleted = Boolean(msg.deleted_at);
+    const messageText = isDeleted ? 'Esta mensagem foi apagada' : escapeHtml(msg.content);
 
     const msgElement = document.createElement('div');
     if (msg.id) msgElement.dataset.messageId = String(msg.id);
     msgElement.dataset.createdAt = String(Date.parse(msg.created_at) || 0);
     msgElement.style.display = 'flex';
     msgElement.style.flexDirection = 'column';
-    msgElement.style.marginBottom = '24px';
+    msgElement.style.marginBottom = '16px';
     msgElement.style.alignItems = isMine ? 'flex-end' : 'flex-start';
     msgElement.style.width = '100%';
 
@@ -769,7 +832,7 @@ function appendMessageToUI(msg) {
     const avatarAlt = isCharacterMessage ? `Foto de ${char.name}` : `Foto de ${senderName}`;
     const avatarContent = senderAvatar
         ? `<img class="message-avatar${isCharacterMessage ? '' : ' message-user-avatar'}" src="${senderAvatar}" alt="${avatarAlt}" ${isCharacterMessage ? '' : `data-user-id="${msg.user_id}"`} loading="lazy" style="width:36px; height:36px; border-radius:50%; object-fit:cover;">`
-        : `<div class="message-avatar message-avatar-fallback${isCharacterMessage ? '' : ' message-user-avatar'}" ${isCharacterMessage ? 'aria-hidden="true"' : `data-user-id="${msg.user_id}"`} style="width:36px; height:36px; border-radius:50%; background:#282436; color:${char?.color || '#c084fc'}; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:bold;">${isCharacterMessage ? senderInitials : (senderInitials || ICONS.user)}</div>`;
+        : `<div class="message-avatar message-avatar-fallback${isCharacterMessage ? '' : ' message-user-avatar'}" ${isCharacterMessage ? 'aria-hidden="true"' : `data-user-id="${msg.user_id}"`} style="width:36px; height:36px; border-radius:50%; background:#282436; color:${char?.color || '#c084fc'}; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:bold;">${isCharacterMessage ? senderInitials : ICONS.user}</div>`;
     const avatarHTML = isCharacterMessage
         ? `<button type="button" class="message-avatar-button" data-character-id="${char.id}" aria-label="Abrir perfil de ${char.name}" title="Ver perfil de ${char.name}" style="background:none; border:none; cursor:pointer; padding:0; outline:none;">${avatarContent}</button>`
         : avatarContent;
@@ -803,8 +866,9 @@ function appendMessageToUI(msg) {
             ${avatarHTML}
             <div style="display: flex; flex-direction: column; align-items: ${isMine ? 'flex-end' : 'flex-start'};">
                 ${headerHTML}
-                <div class="message-bubble" style="padding: 12px 16px; border-radius: 8px; font-size: 14px; line-height: 1.5; ${bubbleStyle}">
-                    ${msg.content}
+                ${msg.reply ? `<button type="button" class="message-reply-reference" data-reply-id="${escapeHtml(msg.reply.id)}"><strong>${msg.reply.user_id === chatState.currentUser.id ? 'Você' : escapeHtml(chatState.roomUsers.get(msg.reply.user_id)?.name || chatState.onlineUsers.get(msg.reply.user_id)?.name || 'Integrante')}</strong><span>${msg.reply.deleted_at ? 'Esta mensagem foi apagada' : escapeHtml(msg.reply.content || '')}</span></button>` : ''}
+                <div class="message-bubble${isDeleted ? ' is-deleted' : ''}" style="padding: 12px 16px; border-radius: 8px; font-size: 14px; line-height: 1.5; ${bubbleStyle}">
+                    ${messageText}
                 </div>
                 <span style="font-size: 11px; color: #52525b; margin-top: 6px;">${time}</span>
             </div>
@@ -886,6 +950,106 @@ if (chatMessagesContainer) {
     chatMessagesContainer.addEventListener('click', event => {
         const avatarButton = event.target.closest('.message-avatar-button');
         if (avatarButton) showCharacterProfile(avatarButton.dataset.characterId);
+
+        const replyReference = event.target.closest('.message-reply-reference');
+        if (replyReference) {
+            const target = Array.from(chatMessagesContainer.children).find(
+                item => item.dataset.messageId === replyReference.dataset.replyId
+            );
+            target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            target?.classList.add('message-reply-highlight');
+            setTimeout(() => target?.classList.remove('message-reply-highlight'), 1200);
+        }
+    });
+
+    chatMessagesContainer.addEventListener('contextmenu', event => {
+        const bubble = event.target.closest('.message-bubble');
+        const messageElement = bubble?.closest('[data-message-id]');
+        if (!bubble || !messageElement) return;
+        event.preventDefault();
+        openMessageActionMenu(messageElement, event.clientX, event.clientY);
+    });
+}
+
+function closeMessageActionMenu() {
+    document.getElementById('message-action-menu')?.remove();
+}
+
+function openMessageActionMenu(messageElement, x, y) {
+    closeMessageActionMenu();
+    const message = chatState.messagesById.get(messageElement.dataset.messageId);
+    if (!message || message.deleted_at) return;
+
+    const menu = document.createElement('div');
+    menu.className = 'context-menu message-context-menu';
+    menu.id = 'message-action-menu';
+    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - 190))}px`;
+    menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - 100))}px`;
+    menu.innerHTML = `<button type="button" class="context-menu-item" data-action="reply">Responder</button>${message.user_id === chatState.currentUser.id ? '<button type="button" class="context-menu-item danger" data-action="delete">Excluir mensagem</button>' : ''}`;
+    document.body.appendChild(menu);
+    menu.addEventListener('click', async event => {
+        const action = event.target.closest('[data-action]')?.dataset.action;
+        closeMessageActionMenu();
+        if (action === 'reply') setReplyTarget(message);
+        if (action === 'delete') await deleteOwnMessage(message);
+    });
+}
+
+function setReplyTarget(message) {
+    chatState.replyTarget = message;
+    const sender = message.user_id === chatState.currentUser.id
+        ? 'Você'
+        : (chatState.roomUsers.get(message.user_id)?.name || chatState.onlineUsers.get(message.user_id)?.name || 'Integrante');
+    replyComposerName.textContent = sender;
+    replyComposerText.textContent = message.content;
+    replyComposer.classList.remove('hidden');
+    chatInput?.focus();
+}
+
+function clearReplyTarget() {
+    chatState.replyTarget = null;
+    replyComposer?.classList.add('hidden');
+    if (replyComposerName) replyComposerName.textContent = '';
+    if (replyComposerText) replyComposerText.textContent = '';
+}
+
+if (replyComposerCancel) replyComposerCancel.addEventListener('click', clearReplyTarget);
+document.addEventListener('click', event => {
+    if (!event.target.closest('#message-action-menu')) closeMessageActionMenu();
+});
+
+async function deleteOwnMessage(message) {
+    const { data, error } = await supabase.rpc('delete_own_room_message', { p_message_id: message.id });
+    if (error) {
+        console.error('Falha ao excluir mensagem:', error);
+        alert('Não foi possível apagar a mensagem. Verifique se a migration de mensagens foi aplicada no Supabase.');
+        return;
+    }
+    const updated = Array.isArray(data) ? data[0] : data;
+    if (updated) applyMessageUpdate(updated);
+}
+
+function applyMessageUpdate(updated) {
+    if (!updated?.id) return;
+    const id = String(updated.id);
+    const message = { ...(chatState.messagesById.get(id) || {}), ...updated };
+    chatState.messagesById.set(id, message);
+
+    const element = Array.from(chatMessagesContainer?.children || []).find(item => item.dataset.messageId === id);
+    if (element && message.deleted_at) {
+        const bubble = element.querySelector('.message-bubble');
+        if (bubble) {
+            bubble.textContent = 'Esta mensagem foi apagada';
+            bubble.classList.add('is-deleted');
+        }
+        element.dataset.deleted = 'true';
+    }
+
+    chatMessagesContainer?.querySelectorAll('.message-reply-reference').forEach(reference => {
+        if (reference.dataset.replyId === id && message.deleted_at) {
+            const preview = reference.querySelector('span');
+            if (preview) preview.textContent = 'Esta mensagem foi apagada';
+        }
     });
 }
 async function processIncomingMessage(newMsg) {
@@ -896,6 +1060,14 @@ async function processIncomingMessage(newMsg) {
             .eq('id', newMsg.character_id)
             .single();
         newMsg.characters = charData;
+    }
+    if (newMsg.reply_to_id && !newMsg.reply) {
+        const { data: reply } = await supabase
+            .from('messages')
+            .select('id, content, user_id, deleted_at')
+            .eq('id', newMsg.reply_to_id)
+            .maybeSingle();
+        newMsg.reply = reply;
     }
     const charData = newMsg.characters;
     if (charData && !chatState.roomCharacters.some(character => character.id === charData.id)) {
@@ -1040,6 +1212,10 @@ function subscribeToMessages() {
         }, payload => {
             processIncomingMessage(payload.new);
         })
+        .on('postgres_changes', {
+            event: 'UPDATE', schema: 'public', table: 'messages',
+            filter: `room_id=eq.${chatState.roomId}`
+        }, payload => applyMessageUpdate(payload.new))
         .subscribe((status, error) => {
             chatState.messageRealtimeConnected = status === 'SUBSCRIBED';
             if (status === 'SUBSCRIBED') {
@@ -1181,6 +1357,7 @@ async function openAddCharacterModal() {
     if (!modalAddRoomChar) return;
 
     await fetchUserWalletCharacters();
+    activeWalletFolderId = null;
 
     selectedWalletCharIds.clear();
     chatState.roomCharacters.forEach(rc => {
@@ -1200,20 +1377,79 @@ function renderModalCharacterGrid() {
     if (!roomCharacterSelectGrid) return;
 
     roomCharacterSelectGrid.style.display = 'grid';
-    roomCharacterSelectGrid.style.gridTemplateColumns = 'repeat(3, 1fr)';
+    roomCharacterSelectGrid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(150px, 1fr))';
     roomCharacterSelectGrid.style.gap = '16px';
     roomCharacterSelectGrid.innerHTML = '';
 
-    if (userWalletCharacters.length === 0) {
-        roomCharacterSelectGrid.innerHTML = '<p style="color:#a1a1aa; grid-column:1/-1; text-align:center;">Sua carteira está vazia. Crie um personagem na guia "Carteira de personagens".</p>';
+    const addFolderCard = (folderId, name, count, isUnfiled = false) => {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'room-wallet-folder-card';
+        card.innerHTML = `<span class="room-wallet-folder-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg></span><strong></strong><small>${count} personagem${count !== 1 ? 's' : ''}</small>`;
+        card.querySelector('strong').textContent = name;
+        card.addEventListener('click', () => {
+            activeWalletFolderId = folderId;
+            renderModalCharacterGrid();
+        });
+        roomCharacterSelectGrid.appendChild(card);
+    };
+
+    if (activeWalletFolderId === null) {
+        const heading = document.createElement('p');
+        heading.className = 'room-wallet-folder-heading';
+        heading.textContent = 'Escolha uma pasta para ver os personagens';
+        roomCharacterSelectGrid.appendChild(heading);
+
+        userWalletFolders.forEach(folder => {
+            const count = userWalletCharacters.filter(char => char.folderId === folder.id).length;
+            addFolderCard(folder.id, folder.name, count);
+        });
+        const unfiledCount = userWalletCharacters.filter(char => !char.folderId).length;
+        if (unfiledCount) addFolderCard(UNFILED_WALLET_FOLDER, 'Sem pasta', unfiledCount, true);
+
+        if (!userWalletFolders.length && !unfiledCount) {
+            const empty = document.createElement('p');
+            empty.className = 'room-wallet-empty';
+            empty.textContent = 'Sua carteira está vazia. Crie pastas e personagens na Carteira de personagens.';
+            roomCharacterSelectGrid.appendChild(empty);
+        }
         return;
     }
 
-    userWalletCharacters.forEach(char => {
+    const backButton = document.createElement('button');
+    backButton.type = 'button';
+    backButton.className = 'room-wallet-back-button';
+    backButton.textContent = '← Voltar às pastas';
+    backButton.addEventListener('click', () => {
+        activeWalletFolderId = null;
+        renderModalCharacterGrid();
+    });
+    roomCharacterSelectGrid.appendChild(backButton);
+
+    const folderName = activeWalletFolderId === UNFILED_WALLET_FOLDER
+        ? 'Sem pasta'
+        : userWalletFolders.find(folder => folder.id === activeWalletFolderId)?.name || 'Pasta';
+    const heading = document.createElement('p');
+    heading.className = 'room-wallet-folder-heading';
+    heading.textContent = folderName;
+    roomCharacterSelectGrid.appendChild(heading);
+
+    const folderCharacters = userWalletCharacters.filter(char => activeWalletFolderId === UNFILED_WALLET_FOLDER
+        ? !char.folderId
+        : char.folderId === activeWalletFolderId);
+
+    if (!folderCharacters.length) {
+        const empty = document.createElement('p');
+        empty.className = 'room-wallet-empty';
+        empty.textContent = 'Esta pasta ainda não tem personagens.';
+        roomCharacterSelectGrid.appendChild(empty);
+        return;
+    }
+
+    folderCharacters.forEach(char => {
         const isSelected = selectedWalletCharIds.has(char.id);
         const card = document.createElement('div');
         card.className = `modal-char-card ${isSelected ? 'selected' : ''}`;
-
         card.style.background = isSelected ? '#191328' : '#161422';
         card.style.border = isSelected ? '1px solid #9333ea' : '1px solid #282436';
         card.style.borderRadius = '12px';
@@ -1223,33 +1459,20 @@ function renderModalCharacterGrid() {
         card.style.alignItems = 'center';
         card.style.cursor = 'pointer';
 
-        let avatarHTML = char.avatar
-            ? `<img src="${char.avatar}" alt="${char.name}" style="width: 52px; height: 52px; border-radius: 10px; object-fit: cover;">`
-            : `<div style="width: 52px; height: 52px; border-radius: 10px; border: 2px dashed ${char.color}; display: flex; align-items: center; justify-content: center; font-weight: 700; color: #ffffff;">${char.initials}</div>`;
-
-        const btnText = isSelected ? '✓ Adicionado' : '+ Adicionar';
-
-        card.innerHTML = `
-            <div style="margin-bottom: 10px;">${avatarHTML}</div>
-            <span style="color: #ffffff; font-weight: 600; font-size: 0.88rem; margin-bottom: 8px;">${char.name}</span>
-            <button type="button" style="width: 100%; padding: 7px; border-radius: 8px; font-size: 0.78rem; font-weight: 600; background: ${isSelected ? 'rgba(147, 51, 234, 0.25)' : 'rgba(147, 51, 234, 0.15)'}; color: ${isSelected ? '#ffffff' : '#c084fc'}; border: ${isSelected ? '1px solid #9333ea' : '1px solid transparent'}; cursor: pointer;">
-                ${btnText}
-            </button>
-        `;
-
+        const avatarHTML = char.avatar
+            ? `<img src="${char.avatar}" alt="${char.name}" style="width:52px;height:52px;border-radius:10px;object-fit:cover;">`
+            : `<div style="width:52px;height:52px;border-radius:10px;border:2px dashed ${char.color};display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;">${char.initials}</div>`;
+        card.innerHTML = `<div style="margin-bottom:10px;">${avatarHTML}</div><span class="room-wallet-character-name"></span><button type="button" class="room-wallet-character-toggle">${isSelected ? '✓ Adicionado' : '+ Adicionar'}</button>`;
+        card.querySelector('.room-wallet-character-name').textContent = char.name;
+        card.querySelector('.room-wallet-character-toggle').classList.toggle('selected', isSelected);
         card.addEventListener('click', () => {
-            if (selectedWalletCharIds.has(char.id)) {
-                selectedWalletCharIds.delete(char.id);
-            } else {
-                selectedWalletCharIds.add(char.id);
-            }
+            if (selectedWalletCharIds.has(char.id)) selectedWalletCharIds.delete(char.id);
+            else selectedWalletCharIds.add(char.id);
             renderModalCharacterGrid();
         });
-
         roomCharacterSelectGrid.appendChild(card);
     });
 }
-
 async function confirmAddCharacters() {
     if (!chatState.roomId) return;
 
@@ -1422,7 +1645,6 @@ function updateInputUI() {
     const activeChar = chatState.roomCharacters.find(
         c => c.id === chatState.activeCharacterId && c.ownerId === chatState.currentUser.id
     );
-
     if (chatState.isEncenacaoEnabled && activeChar) {
         if (inputAvatar && activeChar.avatar) inputAvatar.src = activeChar.avatar;
         if (inputRoleLabel) {
@@ -1441,7 +1663,6 @@ if (toggleEncenacao) {
     toggleEncenacao.addEventListener('change', (e) => {
         chatState.isEncenacaoEnabled = e.target.checked;
         if (characterBar) characterBar.classList.toggle('hidden', !chatState.isEncenacaoEnabled);
-        if (btnAddPersonagem) btnAddPersonagem.classList.toggle('hidden', !chatState.isEncenacaoEnabled);
         renderDeck();
         updateInputUI();
     });
@@ -1455,22 +1676,33 @@ async function sendMessage() {
     const activeChar = chatState.roomCharacters.find(
         c => c.id === chatState.activeCharacterId && c.ownerId === chatState.currentUser.id
     );
+    const replyTarget = chatState.replyTarget;
 
     chatInput.value = '';
     clearTimeout(chatState.typingStopTimer);
     sendTypingEvent(false);
 
-    const { data: insertedMessage, error } = await supabase
+    const messageRecord = {
+        room_id: chatState.roomId,
+        user_id: chatState.currentUser.id,
+        character_id: chatState.isEncenacaoEnabled && activeChar ? activeChar.id : null,
+        content,
+        is_encenacao: chatState.isEncenacaoEnabled && !!activeChar
+    };
+    let insertRequest = supabase
         .from('messages')
-        .insert({
-            room_id: chatState.roomId,
-            user_id: chatState.currentUser.id,
-            character_id: chatState.isEncenacaoEnabled && activeChar ? activeChar.id : null,
-            content: content,
-            is_encenacao: chatState.isEncenacaoEnabled && !!activeChar
-        })
-        .select('id, room_id, user_id, character_id, content, created_at, is_encenacao')
+        .insert(replyTarget ? { ...messageRecord, reply_to_id: replyTarget.id } : messageRecord)
+        .select(replyTarget
+            ? 'id, room_id, user_id, character_id, content, created_at, is_encenacao, reply_to_id, deleted_at'
+            : 'id, room_id, user_id, character_id, content, created_at, is_encenacao')
         .single();
+
+    let { data: insertedMessage, error } = await insertRequest;
+    if (error && replyTarget && isOptionalMessageSchemaError(error)) {
+        chatInput.value = content;
+        alert('Para responder mensagens, aplique a migration de respostas no Supabase e tente novamente.');
+        return;
+    }
 
     if (error) {
         console.error("Erro ao enviar mensagem:", error);
@@ -1490,6 +1722,13 @@ async function sendMessage() {
         }
         : null;
     const message = { ...insertedMessage, characters: character };
+    if (replyTarget) message.reply = {
+        id: replyTarget.id,
+        content: replyTarget.content,
+        user_id: replyTarget.user_id,
+        deleted_at: replyTarget.deleted_at
+    };
+    clearReplyTarget();
     appendMessageToUI(message);
     await broadcastMessage(message);
 }
@@ -1519,7 +1758,6 @@ if (btnSend) {
 // 10. LISTENERS DOS MODAIS E BOOT
 // ==========================================
 
-if (btnAddPersonagem) btnAddPersonagem.addEventListener('click', openAddCharacterModal);
 if (btnCloseRoomCharModal) btnCloseRoomCharModal.addEventListener('click', closeAddCharacterModal);
 if (btnConfirmRoomChars) btnConfirmRoomChars.addEventListener('click', confirmAddCharacters);
 

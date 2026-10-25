@@ -426,6 +426,35 @@
     transform: scale(0.98);
 }
 
+.username-modal-box { text-align: left; }
+.username-modal-box .modal-title { margin-bottom: 0.45rem; }
+.username-modal-box .modal-text { margin-bottom: 1.35rem; }
+.username-label { display: block; margin-bottom: 8px; color: var(--text-muted); font-size: 0.82rem; font-weight: 600; }
+.username-input {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    outline: none;
+    background: #191b25;
+    color: var(--text-light);
+    font-size: 0.95rem;
+}
+.username-input:focus { border-color: var(--primary-purple); }
+.username-modal-actions { display: flex; gap: 10px; margin-top: 18px; }
+.username-cancel-button {
+    flex: 1;
+    padding: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+.username-modal-actions .btn-modal-primary { flex: 1; }
+
 /* =========================================
    MODAL DE BOAS-VINDAS E ALERTAS
 ========================================= */

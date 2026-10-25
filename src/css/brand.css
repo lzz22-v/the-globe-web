@@ -1,0 +1,24 @@
+.splash-logo,
+.brand-title,
+.brand-logo,
+.logo {
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-weight: 800;
+}
+
+.brand-logo,
+.logo {
+    color: #a855f7;
+    font-size: 1.5rem;
+    letter-spacing: -0.5px;
+    line-height: 1.2;
+}
+
+.logo span {
+    color: inherit;
+}
+
+.splash-logo {
+    color: #a855f7;
+    letter-spacing: -1px;
+}

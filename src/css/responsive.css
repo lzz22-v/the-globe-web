@@ -1,0 +1,120 @@
+/* Ajustes compartilhados para tablets e celulares. Carregar após os estilos da página. */
+@media (max-width: 900px) {
+    .main-content { padding-left: 2rem; padding-right: 2rem; }
+    .profile-content-wrapper { max-width: 760px; }
+    .chat-header { flex-wrap: wrap; gap: .75rem; }
+    .chat-header-left, .chat-header-right { min-width: 0; }
+    .chat-header-right { gap: .75rem; }
+    .chat-messages { padding-left: 6%; padding-right: 6%; }
+}
+
+@media (max-width: 700px) {
+    html, body { width: 100%; height: 100%; min-height: 100%; overflow: hidden; }
+
+    .app-layout, .app-container {
+        width: 100%; height: 100vh; height: 100dvh; min-height: 0;
+        overflow: hidden; flex-direction: column;
+    }
+
+    .sidebar {
+        width: 100%; min-width: 0; height: auto; min-height: 0; flex: 0 0 auto;
+        padding: .7rem .85rem; border-right: 0; border-bottom: 1px solid var(--border-color, #252638);
+        gap: .55rem; justify-content: flex-start;
+    }
+    .sidebar-top { gap: .4rem; }
+    .sidebar-header { margin: 0; padding: 0 .1rem; }
+    .brand-logo, .logo { font-size: 1.2rem; }
+    .menu-toggle, .btn-menu-toggle { display: none; }
+    .sidebar-user-card, .user-profile, .user-card { display: none; }
+    .sidebar-nav, .menu {
+        flex: 0 0 auto; flex-direction: row; align-items: center; gap: .4rem;
+        overflow-x: auto; white-space: nowrap; margin: 0; padding-bottom: .1rem;
+        scrollbar-width: none;
+    }
+    .sidebar-nav::-webkit-scrollbar, .menu::-webkit-scrollbar { display: none; }
+    .nav-label, .menu-label, .sidebar-footer, .version { display: none; }
+    .nav-item, .menu-item { flex: 0 0 auto; padding: .55rem .75rem; font-size: .82rem; }
+    .main-content { flex: 1 1 auto; width: 100%; min-width: 0; min-height: 0; padding: 1.25rem 1rem; overflow: auto; }
+
+    .auth-container { height: 100vh; height: 100dvh; overflow-y: auto; flex-direction: column; }
+    .visual-section { flex: 0 0 auto; min-height: 180px; padding: 1rem; }
+    .globe-graphic { width: min(38vw, 150px); height: min(38vw, 150px); margin-bottom: .25rem; }
+    .orbit-path.path-1 { width: 150px; height: 150px; }
+    .orbit-path.path-2 { width: 120px; height: 120px; }
+    .orbit-path.path-3 { width: 170px; height: 170px; }
+    .brand-title { font-size: 1.8rem; margin: .2rem 0; }
+    .brand-subtitle { font-size: .82rem; max-width: 320px; }
+    .form-section { flex: 1 0 auto; align-items: flex-start; padding: 1.5rem 1.15rem 2rem; }
+    .form-header { margin-bottom: 1.25rem; }
+    .form-header h2 { font-size: 1.65rem; }
+    .toggle-form { margin-top: 1.5rem; }
+
+    .page-header { margin-bottom: 1.4rem; }
+    .page-header h2, .header-titles h1 { font-size: 1.45rem; }
+    .profile-content-wrapper { max-width: none; }
+    .profile-details { padding: 0 1rem 1.4rem; }
+    .profile-name { font-size: 1.25rem; overflow-wrap: anywhere; }
+    .profile-email { overflow-wrap: anywhere; }
+    .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
+    .stat-card { padding: .85rem .35rem; }
+    .stat-value { font-size: 1.45rem; }
+    .stat-label { font-size: .7rem; }
+    .action-item { padding: 1rem; font-size: .88rem; }
+
+    .rooms-header { align-items: stretch; flex-direction: column; gap: .9rem; margin-bottom: 1.25rem; padding-bottom: 1rem; }
+    .rooms-header-actions { width: 100%; }
+    .rooms-header-actions > * { min-width: 0; }
+    .rooms-grid { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+    .room-card:hover { transform: none; }
+    .room-modal-wide { width: min(100%, 560px); }
+
+    .content-header { align-items: stretch; flex-direction: column; gap: .9rem; margin-bottom: 1.35rem; }
+    .content-header .btn-primary { justify-content: center; }
+    .folder-toolbar { align-items: stretch; flex-wrap: wrap; gap: .6rem; margin: 0 0 1.15rem; }
+    .folder-toolbar > strong { flex: 1 1 100%; }
+    .folder-toolbar-actions { width: 100%; margin-left: 0; flex-wrap: wrap; }
+    .folder-toolbar-actions button { flex: 1 1 auto; }
+    .character-grid { grid-template-columns: minmax(0, 1fr); gap: .85rem; }
+    .char-card, .folder-card { min-width: 0; padding: 1rem; }
+
+    .chat-layout { height: auto; flex: 1 1 auto; min-height: 0; padding: 0; }
+    .chat-header { flex: 0 0 auto; align-items: flex-start; padding: .7rem .75rem; gap: .55rem; }
+    .chat-header-left { flex: 1 1 100%; gap: .65rem; }
+    .room-title-info { min-width: 0; }
+    .room-title-info h2 { font-size: .95rem; overflow-wrap: anywhere; }
+    .chat-header-center { order: 3; flex: 1 1 100%; justify-content: flex-start; overflow-x: auto; }
+    .tabs-container { gap: .25rem; }
+    .chat-tab { padding: .35rem .55rem; white-space: nowrap; font-size: .78rem; }
+    .chat-header-right { flex: 1 1 100%; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
+    .toggles-group { flex-wrap: wrap; gap: .55rem; }
+    .toggle-container { font-size: .85rem; }
+    .host-media-controls { justify-content: flex-start; gap: .4rem; }
+    .host-media-controls button, .host-media-controls select { max-width: 100%; }
+    .chat-header-right > .btn-primary { width: auto; padding: .5rem .7rem; font-size: .8rem; }
+    .character-bar { flex: 0 0 auto; max-width: 100%; overflow: hidden; }
+    .character-list { overflow-x: auto; }
+    .chat-messages { min-height: 0; padding: 1rem .75rem; gap: .85rem; }
+    .message { max-width: 94%; gap: .5rem; }
+    .message-content { min-width: 0; overflow-wrap: anywhere; }
+    .message-bubble { max-width: 100%; }
+    .chat-footer { flex: 0 0 auto; padding: .65rem .7rem; }
+    .input-wrapper { gap: .5rem; }
+    .input-fields { min-width: 0; }
+    .input-fields input { min-width: 0; font-size: 16px; }
+    .typing-indicator { max-width: 100px; font-size: .72rem; }
+    .modal-overlay { padding: .75rem; }
+    .modal-card, .modal-box { width: 100%; max-width: 560px; max-height: calc(100dvh - 1.5rem); overflow-y: auto; padding: 1.25rem; }
+    .media-broadcast-topbar { padding: .75rem; flex-wrap: wrap; }
+    .media-broadcast-actions { flex-wrap: wrap; }
+}
+
+@media (max-width: 420px) {
+    .main-content { padding: 1rem .75rem; }
+    .stats-grid { gap: .35rem; }
+    .stat-card { padding: .75rem .2rem; }
+    .notification-request-actions { width: 100%; }
+    .rooms-header-actions { flex-wrap: wrap; }
+    .rooms-header-actions button { flex: 1 1 auto; }
+    .chat-header-right > .btn-primary { flex: 1 1 auto; }
+    .character-list .char-item { flex: 0 0 auto; }
+}
