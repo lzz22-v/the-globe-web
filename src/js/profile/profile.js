@@ -84,12 +84,13 @@ btnCloseAlert.addEventListener('click', () => {
 // ==========================================
 // 3. ESTATÍSTICAS DO USUÁRIO
 // ==========================================
-async function fetchUserStats() {
+async function fetchUserStats(userId) {
     try {
         // Busca apenas a quantidade exata de salas (muito mais rápido do que buscar os dados inteiros)
         const { count: roomsCount, error: roomsError } = await supabase
             .from('rooms')
-            .select('*', { count: 'exact', head: true });
+            .select('*', { count: 'exact', head: true })
+            .eq('created_by', userId);
 
         if (roomsError) throw roomsError;
 
@@ -139,7 +140,7 @@ async function initProfile() {
     }
 
     // Chama a função que busca o número de salas
-    fetchUserStats();
+    await fetchUserStats(user.id);
 }
 
 // ==========================================
