@@ -158,8 +158,6 @@ O cliente está em `src/js/config/supabase.js`. O projeto usa:
 | **Storage** | Avatares, capas, wallpapers e vídeos das salas |
 | **Realtime** | Presença, digitação, novas mensagens, personagens, notificações de entrada e estado da mídia |
 
-> [!WARNING]
-> O endereço do projeto e a chave publicável ficam no código do cliente. A chave publicável é destinada ao navegador; a proteção dos dados deve ser feita com **RLS** e políticas de Storage/Realtime no Supabase. **Nunca** coloque uma `service_role` key no código do navegador.
 
 ### Tabelas e recursos usados pelo cliente
 
