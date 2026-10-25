@@ -88,6 +88,8 @@ const toggleEncenacao = document.getElementById('toggle-encenacao');
 const characterBar = document.getElementById('character-bar');
 const characterList = document.getElementById('character-list');
 const hostMediaControls = document.getElementById('host-media-controls');
+const mediaControlsToggle = document.getElementById('media-controls-toggle');
+const chatHeader = document.querySelector('.chat-header');
 const mediaFileInput = document.getElementById('media-file-input');
 const btnAddMedia = document.getElementById('btn-add-media');
 const mediaLibrary = document.getElementById('media-library');
@@ -543,6 +545,15 @@ async function closeMediaBroadcast(notify = false) {
 if (btnAddMedia) btnAddMedia.addEventListener('click', () => chatState.isHost && mediaFileInput?.click());
 if (mediaFileInput) mediaFileInput.addEventListener('change', async () => { await uploadRoomMedia(mediaFileInput.files); mediaFileInput.value = ''; });
 if (mediaLibrary) mediaLibrary.addEventListener('change', updateMediaButtons);
+if (mediaControlsToggle) mediaControlsToggle.addEventListener('click', () => {
+    const expanded = mediaControlsToggle.getAttribute('aria-expanded') !== 'true';
+    mediaControlsToggle.setAttribute('aria-expanded', String(expanded));
+    chatHeader?.classList.toggle('mobile-room-options-expanded', expanded);
+    const label = mediaControlsToggle.querySelector('.media-controls-toggle-label');
+    const icon = mediaControlsToggle.querySelector('.media-controls-toggle-icon');
+    if (label) label.textContent = expanded ? 'Recolher opções' : 'Expandir opções';
+    if (icon) icon.textContent = expanded ? '⌃' : '⌄';
+});
 if (btnBroadcastMedia) btnBroadcastMedia.addEventListener('click', startMediaBroadcast);
 if (btnDeleteMedia) btnDeleteMedia.addEventListener('click', async () => {
     if (!chatState.isHost) return;
