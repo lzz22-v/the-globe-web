@@ -1,4 +1,4 @@
-﻿import { supabase } from '../config/supabase.js';
+import { supabase } from '../config/supabase.js';
 
 // ==========================================
 // 1. MAPEAMENTO DE ELEMENTOS
@@ -605,12 +605,18 @@ btnDeleteRoom.addEventListener('click', async () => {
         loadingOverlay.classList.remove('hidden');
 
         try {
-            const { error: deleteError } = await supabase
+            const { data: deletedRoom, error: deleteError } = await supabase
                 .from('rooms')
                 .delete()
-                .eq('id', currentEditingRoom.id);
+                .eq('id', currentEditingRoom.id)
+                .eq('created_by', currentUser.id)
+                .select('id')
+                .maybeSingle();
 
             if (deleteError) throw deleteError;
+            if (!deletedRoom) {
+                throw new Error('A sala não foi excluída. Verifique a política de exclusão da tabela rooms no Supabase.');
+            }
 
             console.log("✅ Sala excluída com sucesso.");
             closeEditModal();
@@ -618,7 +624,7 @@ btnDeleteRoom.addEventListener('click', async () => {
 
         } catch (error) {
             console.error("Erro ao excluir sala:", error);
-            alert("Erro ao excluir a sala. Verifique sua conexão e tente novamente.");
+            alert(error.message || "Erro ao excluir a sala. Verifique sua conexão e tente novamente.");
             loadingOverlay.classList.add('hidden');
         }
     }

@@ -207,6 +207,12 @@
 
 .character-bar.hidden { display: none; }
 
+.character-bar-controls { display: contents; }
+.mobile-add-character,
+.character-page-indicators { display: none; }
+.character-list-viewport { flex: 1; min-width: 0; }
+.char-page { display: contents; }
+
 .char-bar-label {
     font-size: 0.7rem;
     letter-spacing: 1px;

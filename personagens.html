@@ -63,7 +63,7 @@
             </header>
 
             <div class="folder-toolbar" id="folder-toolbar">
-                <button type="button" class="folder-nav-button hidden" id="btn-back-folders">← Pastas</button>
+                <button type="button" class="folder-nav-button hidden" id="btn-back-folders"><svg class="folder-back-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14.5 5-7 7 7 7"/><path d="M8 12h12"/></svg><span>Pastas</span></button>
                 <strong id="current-folder-title">Suas pastas</strong>
                 <div class="folder-toolbar-actions">
                     <button type="button" class="btn-secondary" id="btn-create-folder">+ Nova pasta</button>
@@ -113,6 +113,21 @@
                         <option value="">Sem pasta</option>
                     </select>
                 </div>
+
+                <div class="form-group">
+                    <label class="form-label" id="char-relevance-label">RELEVÂNCIA / ETIQUETA</label>
+                    <select id="input-char-relevance" class="form-input relevance-value-source" aria-hidden="true" tabindex="-1">
+                        <option value="protagonista">Protagonista</option>
+                        <option value="coadjuvante">Coadjuvante</option>
+                        <option value="secundario" selected>Secundário</option>
+                        <option value="figurante">Figurante</option>
+                    </select>
+                    <div class="relevance-choice-list" id="relevance-choice-list" role="radiogroup" aria-labelledby="char-relevance-label">
+                        <button type="button" class="relevance-choice" data-relevance="protagonista" role="radio"><span class="relevance-choice-icon"></span><span>Protagonista</span></button>
+                        <button type="button" class="relevance-choice" data-relevance="coadjuvante" role="radio"><span class="relevance-choice-icon"></span><span>Coadjuvante</span></button>
+                        <button type="button" class="relevance-choice" data-relevance="secundario" role="radio"><span class="relevance-choice-icon"></span><span>Secundário</span></button>
+                        <button type="button" class="relevance-choice" data-relevance="figurante" role="radio"><span class="relevance-choice-icon"></span><span>Figurante</span></button>
+                    </div>
 
                 <div class="form-group">
                     <label class="form-label">DESCRIÇÃO</label>

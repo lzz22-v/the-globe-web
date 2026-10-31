@@ -38,6 +38,8 @@ const avatarPreview = document.getElementById('avatar-preview');
 
 const inputCharName = document.getElementById('input-char-name');
 const inputCharDesc = document.getElementById('input-char-desc');
+const inputCharRelevance = document.getElementById('input-char-relevance');
+const relevanceChoiceList = document.getElementById('relevance-choice-list');
 
 const colorPaletteContainer = document.getElementById('color-palette');
 const badgeColorDot = document.getElementById('badge-color-dot');
@@ -50,6 +52,14 @@ let currentFolderId = null;
 let selectedColor = PALETTE_COLORS[0];
 let currentAvatarBase64 = null;
 const UNFILED_FOLDER = '__unfiled__';
+
+// Pesos de relevância para fixar protagonistas no topo
+const RELEVANCE_WEIGHT = {
+    'protagonista': 1,
+    'coadjuvante': 2,
+    'secundario': 3,
+    'figurante': 4
+};
 
 // ==========================================
 // 1. INICIALIZAÇÃO E AUTENTICAÇÃO
@@ -102,8 +112,7 @@ async function loadCharacters() {
     const { data, error } = await supabase
         .from('characters')
         .select('*')
-        .eq('user_id', currentUser.id)
-        .order('created_at', { ascending: false });
+        .eq('user_id', currentUser.id);
 
     if (error) {
         console.error('Erro ao carregar personagens:', error);
@@ -117,7 +126,9 @@ async function loadCharacters() {
         description: c.description || '',
         color: c.color || PALETTE_COLORS[0],
         avatar: c.avatar_url || null,
-        initials: c.initials || (c.name ? c.name.substring(0, 2).toUpperCase() : '??')
+        initials: c.initials || (c.name ? c.name.substring(0, 2).toUpperCase() : '??'),
+        relevance: c.relevance || 'secundario',
+        created_at: c.created_at
     }));
 
     renderCharacters();
@@ -142,11 +153,26 @@ function renderPalette() {
         colorPaletteContainer.appendChild(swatch);
     });
 
+    const customColorLabel = document.createElement('label');
+    customColorLabel.className = `color-swatch custom-color-swatch ${PALETTE_COLORS.includes(selectedColor.toUpperCase()) ? '' : 'active'}`;
+    customColorLabel.title = 'Escolher cor personalizada';
+    customColorLabel.setAttribute('aria-label', 'Escolher cor personalizada');
+    customColorLabel.innerHTML = '<span aria-hidden="true">+</span><input type="color" id="custom-character-color" aria-label="Escolher uma cor personalizada">';
+    const customColorInput = customColorLabel.querySelector('input');
+    customColorInput.value = /^#[0-9a-f]{6}$/i.test(selectedColor) ? selectedColor : PALETTE_COLORS[0];
+    customColorInput.addEventListener('input', () => {
+        selectedColor = customColorInput.value.toUpperCase();
+        updateColorSelection();
+    });
+    colorPaletteContainer.appendChild(customColorLabel);
+
     updateColorSelection();
 }
 
 function updateColorSelection() {
-    const swatches = colorPaletteContainer.querySelectorAll('.color-swatch');
+    const swatches = colorPaletteContainer.querySelectorAll('.color-swatch:not(.custom-color-swatch)');
+    const customSwatch = colorPaletteContainer.querySelector('.custom-color-swatch');
+    const customColorInput = colorPaletteContainer.querySelector('#custom-character-color');
     swatches.forEach(s => {
         if (s.style.backgroundColor === hexToRgb(selectedColor) || s.style.backgroundColor === selectedColor) {
             s.classList.add('active');
@@ -154,6 +180,13 @@ function updateColorSelection() {
             s.classList.remove('active');
         }
     });
+
+    if (customSwatch) {
+        const isCustomColor = !PALETTE_COLORS.some(color => color.toLowerCase() === selectedColor.toLowerCase());
+        customSwatch.classList.toggle('active', isCustomColor);
+        customSwatch.style.backgroundColor = isCustomColor ? selectedColor : '';
+        if (customColorInput && /^#[0-9a-f]{6}$/i.test(selectedColor)) customColorInput.value = selectedColor;
+    }
 
     if (badgeColorDot) badgeColorDot.style.backgroundColor = selectedColor;
     if (badgeColorHex) badgeColorHex.textContent = selectedColor.toUpperCase();
@@ -229,6 +262,8 @@ function openModal(char = null) {
         charIdInput.value = char.id;
         inputCharName.value = char.name;
         inputCharDesc.value = char.description || '';
+        if (inputCharRelevance) inputCharRelevance.value = char.relevance || 'secundario';
+        syncRelevanceChoices();
         selectedColor = char.color || PALETTE_COLORS[0];
 
         if (char.avatar) {
@@ -244,6 +279,8 @@ function openModal(char = null) {
         charIdInput.value = '';
         inputCharName.value = '';
         inputCharDesc.value = '';
+        if (inputCharRelevance) inputCharRelevance.value = 'secundario';
+        syncRelevanceChoices();
         selectedColor = PALETTE_COLORS[0];
         resetDropzone();
     }
@@ -364,6 +401,7 @@ formPersonagem.addEventListener('submit', async (e) => {
 
     const name = inputCharName.value.trim();
     const description = inputCharDesc.value.trim();
+    const relevance = inputCharRelevance?.value || 'secundario';
     const id = charIdInput.value;
 
     if (!name) return;
@@ -381,7 +419,8 @@ formPersonagem.addEventListener('submit', async (e) => {
                 color: selectedColor,
                 avatar_url: avatarUrl,
                 initials: avatarUrl ? null : initials,
-                folder_id: folderSelect?.value || null
+                folder_id: folderSelect?.value || null,
+                relevance: relevance
             })
             .eq('id', id)
             .eq('user_id', currentUser.id);
@@ -402,7 +441,8 @@ formPersonagem.addEventListener('submit', async (e) => {
                 color: selectedColor,
                 avatar_url: avatarUrl,
                 initials: avatarUrl ? null : initials,
-                folder_id: folderSelect?.value || null
+                folder_id: folderSelect?.value || null,
+                relevance: relevance
             });
 
         if (error) {
@@ -424,9 +464,22 @@ function renderCharacters() {
     const isRoot = currentFolderId === null;
     const isUnfiled = currentFolderId === UNFILED_FOLDER;
     const activeFolder = folders.find(folder => folder.id === currentFolderId);
-    const visibleCharacters = isRoot
+    
+    let visibleCharacters = isRoot
         ? []
         : characters.filter(character => isUnfiled ? !character.folderId : character.folderId === currentFolderId);
+
+    // ORDENAÇÃO POR RELEVÂNCIA (Protagonistas fixados no topo) E DESEMPATE POR DATA
+    visibleCharacters.sort((a, b) => {
+        const weightA = RELEVANCE_WEIGHT[a.relevance] || 3;
+        const weightB = RELEVANCE_WEIGHT[b.relevance] || 3;
+
+        if (weightA !== weightB) {
+            return weightA - weightB; // Menor peso (1 = Protagonista) vem primeiro
+        }
+
+        return new Date(b.created_at) - new Date(a.created_at);
+    });
 
     if (btnBackFolders) btnBackFolders.classList.toggle('hidden', isRoot);
     if (btnRenameFolder) btnRenameFolder.classList.toggle('hidden', isRoot || isUnfiled || !activeFolder);
@@ -471,7 +524,7 @@ function renderCharacters() {
 
     visibleCharacters.forEach(char => {
         const card = document.createElement('div');
-        card.className = 'char-card';
+        card.className = `char-card relevance-${char.relevance || 'secundario'}`;
         card.style.borderTop = `3px solid ${char.color}`;
 
         const avatarHTML = char.avatar
@@ -483,7 +536,13 @@ function renderCharacters() {
                 <div class="card-header">
                     ${avatarHTML}
                     <div class="card-title-group">
-                        <h3>${char.name}</h3>
+                        <div class="title-with-badge">
+                            <h3>${char.name}</h3>
+                            <span class="relevance-badge badge-${char.relevance}">
+                                ${getRelevanceSvgIcon(char.relevance)}
+                                ${formatRelevanceLabel(char.relevance)}
+                            </span>
+                        </div>
                         <span class="color-tag"><span class="color-dot" style="background-color: ${char.color}"></span>${char.color.toUpperCase()}</span>
                     </div>
                 </div>
@@ -506,6 +565,54 @@ function renderCharacters() {
     });
 }
 
+function syncRelevanceChoices() {
+    if (!relevanceChoiceList || !inputCharRelevance) return;
+    relevanceChoiceList.querySelectorAll('[data-relevance]').forEach(button => {
+        const selected = button.dataset.relevance === inputCharRelevance.value;
+        button.setAttribute('aria-checked', String(selected));
+        button.tabIndex = selected ? 0 : -1;
+    });
+}
+
+if (relevanceChoiceList) {
+    relevanceChoiceList.addEventListener('click', event => {
+        const button = event.target.closest('[data-relevance]');
+        if (!button) return;
+        inputCharRelevance.value = button.dataset.relevance;
+        syncRelevanceChoices();
+    });
+    relevanceChoiceList.querySelectorAll('[data-relevance]').forEach(button => {
+        button.querySelector('.relevance-choice-icon').innerHTML = getRelevanceSvgIcon(button.dataset.relevance);
+    });
+    syncRelevanceChoices();
+}
+
+function formatRelevanceLabel(relevance) {
+    switch(relevance) {
+        case 'protagonista': return 'Protagonista';
+        case 'coadjuvante': return 'Coadjuvante';
+        case 'secundario': return 'Secundário';
+        case 'figurante': return 'Figurante';
+        default: return 'Secundário';
+    }
+}
+
+function getRelevanceSvgIcon(relevance) {
+    // Símbolos vetoriais distintos para comunicar a importância narrativa.
+    const icon = (label, paths) => `<svg class="badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="${label}"><title>${label}</title>${paths}</svg>`;
+    switch(relevance) {
+        case 'protagonista':
+            return icon('Protagonista', '<path d="m3 17 2-10 5 4 2-7 2 7 5-4 2 10H3Z"/><path d="M4 20h16"/><circle cx="12" cy="4" r="1" fill="currentColor" stroke="none"/>');
+        case 'coadjuvante':
+            return icon('Coadjuvante', '<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.3"/><path d="M3.5 19v-1.5a5.5 5.5 0 0 1 11 0V19z"/><path d="M15 14a4.2 4.2 0 0 1 5.5 4v1h-4"/>');
+        case 'secundario':
+            return icon('Secundário', '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.2"/><path d="M12 1.5v2M22.5 12h-2"/>');
+        case 'figurante':
+            return icon('Figurante', '<circle cx="7" cy="9" r="2"/><circle cx="12" cy="7" r="2"/><circle cx="17" cy="9" r="2"/><path d="M3.5 17a3.5 3.5 0 0 1 7 0M8.5 16a3.5 3.5 0 0 1 7 0M13.5 17a3.5 3.5 0 0 1 7 0"/>');
+        default:
+            return icon('Secundário', '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.2"/>');
+    }
+}
 function createFolderCard(name, count, onOpen, isUnfiled = false) {
     const card = document.createElement('button');
     card.type = 'button';
@@ -521,6 +628,7 @@ function createFolderCard(name, count, onOpen, isUnfiled = false) {
     card.addEventListener('click', onOpen);
     return card;
 }
+
 // ==========================================
 async function deleteCharacter(id) {
     if (!confirm('Deseja excluir este personagem da sua carteira?')) return;

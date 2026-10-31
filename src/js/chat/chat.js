@@ -83,10 +83,16 @@ const btnCopyInvite = document.getElementById('btn-copy-invite');
 const chatBackgroundArea = document.getElementById('chat-background') || document.querySelector('.chat-area') || document.querySelector('.main-content');
 const chatMessagesContainer = document.getElementById('chat-messages') || document.querySelector('.messages-container') || document.querySelector('.chat-messages');
 let characterProfileModal = null;
+let activeCharacterPage = 0;
+let characterSwipeStartX = null;
+const MOBILE_CHARACTER_PAGE_SIZE = 15;
 
 const toggleEncenacao = document.getElementById('toggle-encenacao');
 const characterBar = document.getElementById('character-bar');
 const characterList = document.getElementById('character-list');
+const characterListViewport = document.getElementById('character-list-viewport');
+const characterPageIndicators = document.getElementById('character-page-indicators');
+const btnAddCharacterMobile = document.getElementById('btn-add-personagem-mobile');
 const hostMediaControls = document.getElementById('host-media-controls');
 const mediaControlsToggle = document.getElementById('media-controls-toggle');
 const chatHeader = document.querySelector('.chat-header');
@@ -111,6 +117,15 @@ const typingIndicator = document.getElementById('typing-indicator');
 const replyComposer = document.getElementById('reply-composer');
 const replyComposerName = document.getElementById('reply-composer-name');
 const replyComposerText = document.getElementById('reply-composer-text');
+
+function syncMobileViewport() {
+    if (!window.visualViewport) return;
+    document.documentElement.style.setProperty('--visual-viewport-height', `${window.visualViewport.height}px`);
+}
+
+syncMobileViewport();
+window.visualViewport?.addEventListener('resize', syncMobileViewport);
+window.visualViewport?.addEventListener('scroll', syncMobileViewport);
 const replyComposerCancel = document.getElementById('reply-composer-cancel');
 
 const modalAddRoomChar = document.getElementById('modal-add-room-char');
@@ -550,9 +565,9 @@ if (mediaControlsToggle) mediaControlsToggle.addEventListener('click', () => {
     mediaControlsToggle.setAttribute('aria-expanded', String(expanded));
     chatHeader?.classList.toggle('mobile-room-options-expanded', expanded);
     const label = mediaControlsToggle.querySelector('.media-controls-toggle-label');
-    const icon = mediaControlsToggle.querySelector('.media-controls-toggle-icon');
     if (label) label.textContent = expanded ? 'Recolher opções' : 'Expandir opções';
-    if (icon) icon.textContent = expanded ? '⌃' : '⌄';
+    mediaControlsToggle.setAttribute('aria-label', expanded ? 'Recolher opções de mídia' : 'Mostrar opções de mídia');
+    mediaControlsToggle.title = expanded ? 'Recolher opções de mídia' : 'Opções de mídia';
 });
 if (btnBroadcastMedia) btnBroadcastMedia.addEventListener('click', startMediaBroadcast);
 if (btnDeleteMedia) btnDeleteMedia.addEventListener('click', async () => {
@@ -1269,8 +1284,7 @@ function renderDeck() {
 
     characterList.innerHTML = '';
     const sortedCharacters = getSortedCharacters();
-
-    sortedCharacters.forEach(char => {
+    const characterItems = sortedCharacters.map(char => {
         const isMyChar = char.ownerId === chatState.currentUser.id;
         const isActive = isMyChar && char.id === chatState.activeCharacterId;
         const isStandby = isMyChar && !isActive;
@@ -1328,18 +1342,87 @@ function renderDeck() {
             showContextMenu(e, char);
         });
 
-        characterList.appendChild(charItem);
+        return charItem;
     });
 
+    const pageCount = Math.max(1, Math.ceil(characterItems.length / MOBILE_CHARACTER_PAGE_SIZE));
+    activeCharacterPage = Math.min(activeCharacterPage, pageCount - 1);
+
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+        const page = document.createElement('div');
+        page.className = 'char-page';
+        page.setAttribute('role', 'group');
+        page.setAttribute('aria-label', `Página ${pageIndex + 1} de ${pageCount} de personagens`);
+        characterItems
+            .slice(pageIndex * MOBILE_CHARACTER_PAGE_SIZE, (pageIndex + 1) * MOBILE_CHARACTER_PAGE_SIZE)
+            .forEach(item => page.appendChild(item));
+        characterList.appendChild(page);
+    }
+
     const addCard = document.createElement('div');
-    addCard.className = 'char-item';
+    addCard.className = 'char-item desktop-add-character';
     addCard.innerHTML = `
         <div class="char-avatar-wrapper placeholder add" title="Adicionar personagem à sala">+</div>
         <span>Novo</span>
     `;
     addCard.addEventListener('click', openAddCharacterModal);
     characterList.appendChild(addCard);
+
+    renderCharacterPageIndicators(pageCount);
+    updateCharacterPagePosition();
 }
+
+function updateCharacterPagePosition() {
+    if (!characterList) return;
+    const isMobile = window.matchMedia('(max-width: 700px)').matches;
+    characterList.style.transform = isMobile ? `translateX(-${activeCharacterPage * 100}%)` : '';
+
+    characterPageIndicators?.querySelectorAll('.character-page-dot').forEach((dot, index) => {
+        dot.setAttribute('aria-current', String(index === activeCharacterPage));
+    });
+}
+
+function setActiveCharacterPage(pageIndex, pageCount) {
+    activeCharacterPage = Math.max(0, Math.min(pageIndex, pageCount - 1));
+    updateCharacterPagePosition();
+}
+
+function renderCharacterPageIndicators(pageCount) {
+    if (!characterPageIndicators) return;
+    characterPageIndicators.innerHTML = '';
+    characterPageIndicators.hidden = pageCount < 2;
+
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+        const dot = document.createElement('button');
+        dot.type = 'button';
+        dot.className = 'character-page-dot';
+        dot.setAttribute('aria-label', `Ir para a página ${pageIndex + 1} de personagens`);
+        dot.setAttribute('aria-current', String(pageIndex === activeCharacterPage));
+        dot.addEventListener('click', () => setActiveCharacterPage(pageIndex, pageCount));
+        characterPageIndicators.appendChild(dot);
+    }
+}
+
+if (btnAddCharacterMobile) btnAddCharacterMobile.addEventListener('click', openAddCharacterModal);
+
+if (characterListViewport) {
+    characterListViewport.addEventListener('pointerdown', event => {
+        if (window.matchMedia('(max-width: 700px)').matches) characterSwipeStartX = event.clientX;
+    });
+
+    characterListViewport.addEventListener('pointerup', event => {
+        if (characterSwipeStartX === null) return;
+        const distance = event.clientX - characterSwipeStartX;
+        characterSwipeStartX = null;
+        const pageCount = characterList?.querySelectorAll('.char-page').length || 1;
+        if (Math.abs(distance) < 40 || pageCount < 2) return;
+        setActiveCharacterPage(activeCharacterPage + (distance < 0 ? 1 : -1), pageCount);
+    });
+
+    characterListViewport.addEventListener('pointercancel', () => { characterSwipeStartX = null; });
+}
+
+window.addEventListener('resize', updateCharacterPagePosition);
 
 async function setActiveCharacter(charId) {
     const char = chatState.roomCharacters.find(c => c.id === charId);
@@ -1746,6 +1829,11 @@ async function sendMessage() {
 
 if (chatInput) {
     chatInput.addEventListener('input', updateTypingState);
+    chatInput.addEventListener('focus', () => {
+        requestAnimationFrame(() => {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        });
+    });
     chatInput.addEventListener('blur', () => {
         clearTimeout(chatState.typingStopTimer);
         sendTypingEvent(false);

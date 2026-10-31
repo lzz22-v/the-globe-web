@@ -180,6 +180,7 @@ Aplicar na ordem dos nomes pelo SQL Editor do Supabase, após criar o esquema ba
 | 2 | `supabase/migrations/20261024000100_room_user_display_names.sql` | RPC segura para buscar nomes e avatares dos integrantes de uma sala |
 | 3 | `supabase/migrations/20261025000100_room_message_replies_and_deletion.sql` | Campos de resposta e exclusão lógica, além da RPC de exclusão da própria mensagem |
 | 4 | `supabase/migrations/20261025000200_character_folders.sql` | Tabela de pastas, políticas RLS e vínculo entre pasta e personagem |
+| 5 | `supabase/migrations/20261031000000_room_creator_delete_policy.sql` | Permite que o criador exclua a própria sala |
 
 > [!NOTE]
 > As migrações não criam todo o banco do theGlobe: elas adicionam recursos ao esquema base já existente. Antes de publicar, confira as políticas RLS das tabelas principais e buckets de avatar/capa; as políticas adicionais necessárias a estes recursos não são todas definidas neste conjunto de migrações.
