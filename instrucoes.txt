@@ -1,0 +1,2 @@
+A organização responsiva está em chat.js
+Usar somente chat.html da dist

@@ -85,7 +85,7 @@ const chatMessagesContainer = document.getElementById('chat-messages') || docume
 let characterProfileModal = null;
 let activeCharacterPage = 0;
 let characterSwipeStartX = null;
-const MOBILE_CHARACTER_PAGE_SIZE = 15;
+const MOBILE_CHARACTER_PAGE_SIZE = 10; // ← Limite reduzido para garantir 2 linhas (ex: 5 por linha)
 
 const toggleEncenacao = document.getElementById('toggle-encenacao');
 const characterBar = document.getElementById('character-bar');
