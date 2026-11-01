@@ -815,8 +815,8 @@ function startMessageSyncLoop() {
     if (chatState.messageSyncTimer) clearInterval(chatState.messageSyncTimer);
     chatState.messageSyncTimer = setInterval(() => {
         syncNewMessages();
-        syncRoomCharacters();
-    }, 2500);
+       // syncRoomCharacters();
+    }, 10000);
 }
 
 function renderAllMessages(messages) {
