@@ -1,5 +1,3 @@
-//chat.js
-
 import { supabase } from '../config/supabase.js';
 
 const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ccc'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E";
@@ -87,7 +85,7 @@ const chatMessagesContainer = document.getElementById('chat-messages') || docume
 let characterProfileModal = null;
 let activeCharacterPage = 0;
 let characterSwipeStartX = null;
-const MOBILE_CHARACTER_PAGE_SIZE = 10; // ← Limite reduzido para garantir 2 linhas (ex: 5 por linha)
+const MOBILE_CHARACTER_PAGE_SIZE = 10;
 
 const toggleEncenacao = document.getElementById('toggle-encenacao');
 const characterBar = document.getElementById('character-bar');
@@ -123,8 +121,6 @@ const replyComposerText = document.getElementById('reply-composer-text');
 // ==========================================
 // VIEWPORT MOBILE / TECLADO VIRTUAL
 // ==========================================
-// Altura de referência (sem teclado). Com `interactive-widget=resizes-content`
-// o window.innerHeight também encolhe, então guardamos a maior altura vista.
 let baselineViewportHeight = window.innerHeight;
 
 function syncMobileViewport() {
@@ -138,7 +134,6 @@ function syncMobileViewport() {
     const keyboardOpen = baselineViewportHeight - height > 150;
     document.body.classList.toggle('keyboard-open', keyboardOpen);
 
-    // Impede que o navegador "empurre" a página para cima ao abrir o teclado.
     window.scrollTo(0, 0);
 
     if (keyboardOpen) scrollToLatestMessage();
@@ -215,9 +210,6 @@ async function initChat() {
 
     document.addEventListener('click', removeContextMenu);
 
-    // ==========================================
-    // REMOVE SPLASH SCREEN & LIBERA INPUTS
-    // ==========================================
     const splashScreen = document.getElementById('splash-screen');
     if (splashScreen) {
         splashScreen.classList.add('hidden');
@@ -341,7 +333,7 @@ function updatePresenceUI() {
 async function loadRoomDetails() {
     const { data: room, error } = await supabase
         .from('rooms')
-        .select('title, wallpaper_url, invite_code, created_by') // Busca o código de convite também
+        .select('title, wallpaper_url, invite_code, created_by')
         .eq('id', chatState.roomId)
         .single();
 
@@ -352,12 +344,10 @@ async function loadRoomDetails() {
         if (chatState.isHost) loadMediaLibrary();
         if (roomTitle) roomTitle.textContent = room.title;
         
-        // Exibe o código de convite na UI se existir
         if (roomInviteCode) {
             roomInviteCode.textContent = room.invite_code || '------';
         }
 
-        // Adiciona evento de copiar
         if (btnCopyInvite && room.invite_code) {
             btnCopyInvite.addEventListener('click', () => {
                 navigator.clipboard.writeText(room.invite_code).then(() => {
@@ -379,8 +369,6 @@ async function loadRoomDetails() {
     }
 }
 
-// O anfitrião controla uma única fonte de verdade; os demais clientes recebem
-// posição, pausa e velocidade pelo Broadcast e carregam o mesmo arquivo do Storage.
 async function loadRoomUserProfiles() {
     if (!chatState.roomId) return;
     const { data, error } = await supabase.rpc('get_room_user_profiles', { p_room_id: chatState.roomId });
@@ -557,8 +545,6 @@ async function startMediaBroadcast() {
 }
 
 async function closeMediaBroadcast(notify = false) {
-    // Desliga o heartbeat antes do evento de parada para impedir que um estado
-    // ativo atrasado reabra a transmissão nos demais clientes.
     clearInterval(chatState.mediaSyncTimer);
     chatState.mediaSyncTimer = null;
     chatState.activeMedia = null;
@@ -675,14 +661,18 @@ async function broadcastRoomCharactersChanged() {
 async function syncRoomCharacters() {
     const previousActiveId = chatState.activeCharacterId;
     await fetchRoomCharacters();
-    const activeCharacter = chatState.roomCharacters.find(character =>
-        character.id === previousActiveId && character.ownerId === chatState.currentUser.id
-    );
-    if (!activeCharacter) {
-        chatState.activeCharacterId = chatState.roomCharacters.find(character =>
-            character.ownerId === chatState.currentUser.id
-        )?.id || null;
+    
+    if (previousActiveId) {
+        const activeCharacter = chatState.roomCharacters.find(character =>
+            character.id === previousActiveId && character.ownerId === chatState.currentUser.id
+        );
+        if (!activeCharacter) {
+            chatState.activeCharacterId = null;
+        }
+    } else {
+        chatState.activeCharacterId = null;
     }
+
     renderDeck();
     updateInputUI();
     if (modalAddRoomChar && !modalAddRoomChar.classList.contains('hidden')) renderModalCharacterGrid();
@@ -809,7 +799,6 @@ function rememberMessageTimestamp(value) {
 async function syncNewMessages() {
     if (!chatState.roomId || !chatState.messagesLoaded) return;
 
-    // Consulta uma pequena janela anterior para cobrir eventos atrasados; IDs evitam duplicatas.
     const since = new Date(Math.max(0, chatState.latestMessageTimestamp - 5000)).toISOString();
     const { data, error } = await queryRoomMessages(since);
 
@@ -1324,15 +1313,20 @@ function renderDeck() {
         let stateClass = 'free';
         let badgeHTML = `<span class="status-badge free-icon">${ICONS.unlock}</span>`;
         let tooltipText = 'Personagem Solto - Clique para assumir';
+        
+        let wrapperStyle = !char.avatar ? `border-color: ${char.color};` : '';
 
+        // INJEÇÃO DA COR DINÂMICA
         if (isActive) {
             stateClass = 'active';
-            badgeHTML = `<span class="status-badge active-check">${ICONS.check}</span>`;
+            badgeHTML = `<span class="status-badge active-check" style="background-color: ${char.color}; color: #fff;">${ICONS.check}</span>`;
             tooltipText = 'Personagem Ativo (Sua fala)';
+            wrapperStyle = `border-color: ${char.color}; border-style: solid; box-shadow: 0 0 12px ${char.color}40;`;
         } else if (isStandby) {
             stateClass = 'standby';
-            badgeHTML = `<span class="status-badge standby-icon">${ICONS.pause}</span>`;
+            badgeHTML = `<span class="status-badge standby-icon" style="background-color: ${char.color}; color: #fff;">${ICONS.pause}</span>`;
             tooltipText = 'Em Standby - Clique para mudar para Ativo';
+            wrapperStyle = `border-color: ${char.color}; border-style: dashed;`;
         } else if (isTaken) {
             stateClass = 'taken';
             badgeHTML = `<span class="status-badge taken-icon">${ICONS.lock}</span>`;
@@ -1347,7 +1341,7 @@ function renderDeck() {
             : `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #1a1b26; color: ${char.color}; font-weight: bold;">${char.initials}</div>`;
 
         charItem.innerHTML = `
-            <div class="char-avatar-wrapper" title="${tooltipText}" style="${!char.avatar ? 'border-color: ' + char.color : ''}">
+            <div class="char-avatar-wrapper" title="${tooltipText}" style="${wrapperStyle}">
                 ${avatarImgOrInitials}
                 ${badgeHTML}
             </div>

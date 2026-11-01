@@ -210,7 +210,12 @@
 .character-bar-controls { display: contents; }
 .mobile-add-character,
 .character-page-indicators { display: none; }
-.character-list-viewport { flex: 1; min-width: 0; }
+
+.character-list-viewport { 
+    flex: 1; 
+    min-width: 0; 
+}
+
 .char-page { display: contents; }
 
 .char-bar-label {
@@ -220,10 +225,29 @@
     font-weight: 600;
 }
 
+/* === MODIFICADO: AQUI PERMITE O SCROLL HORIZONTAL === */
 .character-list {
     display: flex;
     gap: 1.4rem;
     align-items: center;
+    overflow-x: auto;
+    padding-bottom: 4px; /* Pequeno espaçamento para a barra de scroll não cortar os itens */
+    scrollbar-width: thin; /* Para Firefox */
+    scrollbar-color: #4b5563 transparent; /* Para Firefox */
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch; /* Suavidade no Safari/iOS */
+}
+
+/* Estilo para a scrollbar no Chrome/Safari/Edge */
+.character-list::-webkit-scrollbar {
+    height: 6px;
+}
+.character-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+.character-list::-webkit-scrollbar-thumb {
+    background-color: #4b5563;
+    border-radius: 20px;
 }
 
 .char-item {
@@ -235,6 +259,7 @@
     opacity: 0.75;
     transition: all 0.2s ease;
     position: relative;
+    flex-shrink: 0; /* Previne que os itens sejam esmagados ao fazer scroll */
 }
 
 .char-item:hover {
