@@ -1,3 +1,5 @@
+//chat.js
+
 import { supabase } from '../config/supabase.js';
 
 const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ccc'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E";
@@ -118,10 +120,36 @@ const replyComposer = document.getElementById('reply-composer');
 const replyComposerName = document.getElementById('reply-composer-name');
 const replyComposerText = document.getElementById('reply-composer-text');
 
+// ==========================================
+// VIEWPORT MOBILE / TECLADO VIRTUAL
+// ==========================================
+// Altura de referência (sem teclado). Com `interactive-widget=resizes-content`
+// o window.innerHeight também encolhe, então guardamos a maior altura vista.
+let baselineViewportHeight = window.innerHeight;
+
 function syncMobileViewport() {
-    if (!window.visualViewport) return;
-    document.documentElement.style.setProperty('--visual-viewport-height', `${window.visualViewport.height}px`);
+    const vv = window.visualViewport;
+    const height = vv ? vv.height : window.innerHeight;
+
+    if (height > baselineViewportHeight) baselineViewportHeight = height;
+
+    document.documentElement.style.setProperty('--visual-viewport-height', `${height}px`);
+
+    const keyboardOpen = baselineViewportHeight - height > 150;
+    document.body.classList.toggle('keyboard-open', keyboardOpen);
+
+    // Impede que o navegador "empurre" a página para cima ao abrir o teclado.
+    window.scrollTo(0, 0);
+
+    if (keyboardOpen) scrollToLatestMessage();
 }
+
+window.addEventListener('orientationchange', () => {
+    setTimeout(() => {
+        baselineViewportHeight = window.visualViewport?.height || window.innerHeight;
+        syncMobileViewport();
+    }, 300);
+});
 
 syncMobileViewport();
 window.visualViewport?.addEventListener('resize', syncMobileViewport);
@@ -1830,13 +1858,17 @@ async function sendMessage() {
 if (chatInput) {
     chatInput.addEventListener('input', updateTypingState);
     chatInput.addEventListener('focus', () => {
-        requestAnimationFrame(() => {
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-        });
+        // Aguarda o teclado terminar de abrir antes de ajustar layout e scroll.
+        setTimeout(() => {
+            syncMobileViewport();
+            window.scrollTo(0, 0);
+            scrollToLatestMessage();
+        }, 300);
     });
     chatInput.addEventListener('blur', () => {
         clearTimeout(chatState.typingStopTimer);
         sendTypingEvent(false);
+        setTimeout(syncMobileViewport, 300);
     });
     chatInput.addEventListener('keydown', async (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {

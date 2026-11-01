@@ -141,6 +141,11 @@
     .modal-card, .modal-box { width: 100%; max-width: 560px; max-height: calc(100dvh - 1.5rem); overflow-y: auto; padding: 1.25rem; }
     .media-broadcast-topbar { padding: .75rem; flex-wrap: wrap; }
     .media-broadcast-actions { flex-wrap: wrap; }
+
+    /* TECLADO ABERTO: libera o espaço para as mensagens */
+    body.keyboard-open .character-bar { display: none; }
+    body.keyboard-open .sidebar { display: none; }
+    body.keyboard-open .chat-footer { padding-bottom: .55rem; }
 }
 
 @media (max-width: 420px) {

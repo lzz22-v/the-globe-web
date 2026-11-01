@@ -30,6 +30,7 @@
 body, html {
     width: 100%;
     height: 100vh;
+    height: 100dvh;
     font-family: var(--font-main);
     background-color: var(--bg-dark);
     color: var(--text-light);
@@ -100,6 +101,7 @@ button {
     display: flex;
     width: 100vw;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
     background-color: var(--bg-dark);
 }
@@ -111,6 +113,7 @@ button {
     width: 260px;
     min-width: 260px;
     height: 100vh;
+    height: 100dvh;
     background-color: #0b0c10;
     border-right: 1px solid var(--border-color);
     display: flex;
