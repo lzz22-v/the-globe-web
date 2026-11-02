@@ -7,11 +7,11 @@
   <img alt="CSS3" src="https://img.shields.io/badge/CSS3-0d0b16?style=for-the-badge&logo=css3&logoColor=1572B6">
   <img alt="JavaScript" src="https://img.shields.io/badge/JavaScript_ES_Modules-0d0b16?style=for-the-badge&logo=javascript&logoColor=F7DF1E">
   <img alt="Supabase" src="https://img.shields.io/badge/Supabase-0d0b16?style=for-the-badge&logo=supabase&logoColor=3ECF8E">
-  <img alt="Netlify" src="https://img.shields.io/badge/Netlify-0d0b16?style=for-the-badge&logo=netlify&logoColor=00C7B7">
+  <img alt="Cloudflare Pages" src="https://img.shields.io/badge/Cloudflare_Pages-0d0b16?style=for-the-badge&logo=cloudflarepages&logoColor=F38020">
 </p>
 
 <p align="center">
-  <a href="https://theglobe0.netlify.app/">
+  <a href="https://theglobe.com.br/">
     <img alt="Acessar theGlobe" src="https://img.shields.io/badge/ACESSAR_O_SITE-a855f7?style=for-the-badge&logo=googlechrome&logoColor=white">
   </a>
 </p>
@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <a href="https://theglobe0.netlify.app/">Site</a> ·
+  <a href="https://theglobe.com.br/">Site</a> ·
   <a href="#-destaques">Destaques</a> ·
   <a href="#-telas-e-funcionalidades">Telas</a> ·
   <a href="#-como-funciona-uma-sala">Salas</a> ·
@@ -35,9 +35,9 @@
 
 ## ✨ Destaques
 
-| 🔐 Acesso com Google | 📱 Desktop e mobile | ⚡ Tempo real |
+| 🔐 Acesso com Google | 📱 Desktop e mobile | ⚡ Tempo real & Performance |
 |:---:|:---:|:---:|
-| Login com e-mail e senha ou OAuth do Google via Supabase Auth | Layout responsivo: navegação lateral no desktop, barra compacta no celular | Mensagens, presença, digitação, personagens e mídia sincronizados pelo Realtime |
+| Login com e-mail e senha ou OAuth do Google via Supabase Auth | Layout responsivo: navegação lateral no desktop, rolagem suave e barra compacta no celular | Mensagens, presença, digitação e personagens sincronizados via Realtime com polling otimizado |
 
 | 🎭 Encenação | 🗂️ Carteira de personagens | 🎬 Transmissão de vídeo |
 |:---:|:---:|:---:|
@@ -109,7 +109,7 @@
 - Resposta a uma mensagem pelo menu contextual. Mensagens respondidas mostram uma referência clicável à mensagem original.
 - O autor pode apagar a própria mensagem. Ela permanece no histórico como “Esta mensagem foi apagada”, e a referência a ela também é atualizada.
 - Indicador de digitação dos demais participantes.
-- Faixa de personagens da sala: adicionar personagens da carteira, selecionar qual personagem está ativo, assumir personagens livres e soltar ou remover personagens conforme a posse.
+- Faixa de personagens da sala com rolagem horizontal suave dedicada no desktop e comportamento otimizado no mobile: adicionar personagens da carteira, selecionar qual personagem está ativo, assumir personagens livres e soltar ou remover personagens conforme a posse.
 - Clique com o botão direito em um personagem abre as ações disponíveis para aquele personagem.
 - O modo Encenação pode ser ativado ou desativado no chat. Com personagem ativo, as mensagens usam a identidade e a cor dele; sem personagem ativo, usam a identidade da conta.
 - No celular, as opções da sala podem ser expandidas ou recolhidas. O painel contém o convite e, para o anfitrião, os controles de mídia.
@@ -143,102 +143,3 @@ flowchart LR
     C -->|Aceita| D["Sala aparece em Minhas salas"]
     C -->|Rejeita| F["Pedido encerrado"]
     D --> E["Chat · personagens · mídia"]
-```
-
-1. O usuário cria uma sala ou envia um código de convite de outra sala.
-2. O convite cria uma solicitação pendente; o anfitrião aceita ou rejeita na aba **Notificações**.
-3. Após ser aceito, o usuário encontra a sala em **Minhas salas** e pode abri-la.
-4. Dentro do chat, cada participante pode adicionar personagens da própria carteira. Personagens livres podem ser assumidos; personagens em uso ficam identificados pelo participante que os controla.
-5. As mensagens são gravadas em `public.messages`. Broadcast e eventos Postgres Changes distribuem atualizações em tempo real; há também uma consulta de recuperação periódica para cobrir eventos perdidos.
-6. Se o anfitrião usar a transmissão, ele seleciona um vídeo da biblioteca da sala. Todos os membros carregam esse mesmo arquivo e recebem os comandos de sincronização pelo canal Realtime.
-
-## 🗄️ Serviços e dados
-
-### Supabase
-
-O cliente está em `src/js/config/supabase.js`. O projeto usa:
-
-| Recurso | Uso |
-|---|---|
-| **Auth** | Sessão, cadastro por e-mail/senha e OAuth com Google |
-| **Postgres** | Salas, membros, solicitações, mensagens, personagens e pastas |
-| **Storage** | Avatares, capas, wallpapers e vídeos das salas |
-| **Realtime** | Presença, digitação, novas mensagens, personagens, notificações de entrada e estado da mídia |
-
-### Tabelas e recursos usados pelo cliente
-
-O código consulta as tabelas `rooms`, `room_members`, `room_requests`, `messages`, `characters` e `room_characters`. A migração de pastas adiciona `character_folders` e `characters.folder_id`. As colunas-base dessas tabelas devem existir antes de aplicar as migrações listadas abaixo; a configuração inicial do esquema base não está incluída neste repositório.
-
-As funções RPC usadas incluem:
-
-- `get_room_user_profiles(p_room_id)` — entrega os nomes e avatares públicos dos participantes de uma sala.
-- `delete_own_room_message(p_message_id)` — apaga uma mensagem própria sem removê-la do histórico.
-
-### Migrações incluídas
-
-Aplicar na ordem dos nomes pelo SQL Editor do Supabase, após criar o esquema base:
-
-| # | Arquivo | O que faz |
-|:-:|---|---|
-| 1 | `supabase/migrations/20261024000000_room_media_broadcast.sql` | Políticas para listar, enviar e apagar mídia da sala e para receber/transmitir o estado de vídeo pelo Realtime |
-| 2 | `supabase/migrations/20261024000100_room_user_display_names.sql` | RPC segura para buscar nomes e avatares dos integrantes de uma sala |
-| 3 | `supabase/migrations/20261025000100_room_message_replies_and_deletion.sql` | Campos de resposta e exclusão lógica, além da RPC de exclusão da própria mensagem |
-| 4 | `supabase/migrations/20261025000200_character_folders.sql` | Tabela de pastas, políticas RLS e vínculo entre pasta e personagem |
-| 5 | `supabase/migrations/20261031000000_room_creator_delete_policy.sql` | Permite que o criador exclua a própria sala |
-
-> [!NOTE]
-> As migrações não criam todo o banco do theGlobe: elas adicionam recursos ao esquema base já existente. Antes de publicar, confira as políticas RLS das tabelas principais e buckets de avatar/capa; as políticas adicionais necessárias a estes recursos não são todas definidas neste conjunto de migrações.
-
-### Buckets de Storage
-
-- `avatars`: usado para fotos de perfil.
-- `rooms`: usado para capas, wallpapers e arquivos de vídeo. A migração de mídia protege os arquivos em `media/<id-da-sala>/...` para que somente o anfitrião possa enviar/apagar e somente membros autorizados possam listar.
-
-O cliente usa URLs públicas para exibir imagens. Revise a configuração e as políticas dos buckets no painel do Supabase para compatibilizar leitura pública de imagens com as permissões de upload apropriadas.
-
-### Realtime e permissões
-
-Habilite no Supabase os recursos Realtime para os canais usados e a publicação de mudanças das tabelas que precisam emitir eventos, principalmente `messages`, `room_characters` e `room_requests`. A migração de mídia adiciona políticas em `realtime.messages`, mas o projeto também precisa ter Realtime habilitado e as políticas/tabelas configuradas corretamente.
-
-As validações na interface ajudam a orientar o usuário, mas não substituem políticas de segurança no banco. Configure RLS para limitar cada conta às próprias pastas/personagens, cada anfitrião às próprias salas e cada membro aos dados da sala a que foi aceito.
-
-## 🚀 Desenvolvimento e publicação
-
-### Requisitos
-
-- Node.js com npm, para gerar a pasta de publicação.
-- Um projeto Supabase configurado com Auth, banco, Storage, Realtime e esquema compatíveis.
-- Um servidor HTTP local para abrir os arquivos durante o desenvolvimento. Como o front-end usa módulos ES e imports remotos do Supabase, abrir as páginas diretamente como `file://` não é o fluxo recomendado. Pode-se usar a extensão Live Server do VS Code ou outro servidor estático.
-
-### Gerar o site
-
-Na raiz do repositório:
-
-```powershell
-npm install
-npm run build
-```
-
-O script `scripts/build.mjs` recria `dist` e copia as cinco páginas publicadas (`index.html`, `rooms.html`, `personagens.html`, `profile.html` e `chat.html`), a pasta `src` e os arquivos de `public`. A página de entrada é `index.html`.
-
-Para publicação manual no Netlify, envie o conteúdo da pasta `dist`. A configuração `netlify.toml` usa o comando `npm run build` e publica `dist` em deploys conectados ao repositório.
-
-### Configuração do Supabase Auth e Google
-
-- Defina a URL do site e os redirect URLs permitidos nas configurações de Auth do Supabase.
-- Para Google, configure o provedor OAuth no Supabase e os endereços de callback exigidos pelo painel do Supabase/Google.
-- A aplicação retorna o usuário para `/profile.html` após o OAuth.
-- Verifique a configuração de confirmação de e-mail: o fluxo da interface redireciona após cadastro, mas o comportamento efetivo depende das opções de confirmação do projeto Supabase.
-
-## ⚠️ Limitações conhecidas
-
-- A sincronização de mensagens combina Realtime com uma consulta periódica de recuperação a cada 2,5 segundos; portanto, a consulta de fallback não é a fonte de latência instantânea.
-- Sincronização de mídia depende de Realtime, Storage, permissões corretas e disponibilidade do mesmo arquivo para todos. Navegadores podem bloquear autoplay com áudio até uma interação do usuário.
-- A migração de exclusão de mensagens permite excluir apenas mensagens próprias. O anfitrião não tem, na implementação atual da interface/RPC, um fluxo de exclusão de mensagens de terceiros.
-- No perfil, a contagem de salas é carregada com base em salas criadas pelo usuário. Os campos visuais de contagem de personagens e mensagens ainda não são preenchidos pela rotina atual.
-- O botão **Alterar senha** aparece na lista de ações do perfil, mas ainda não possui fluxo de alteração implementado.
-- Sem foto cadastrada, a interface utiliza o ícone padrão de usuário; personagens sem imagem usam iniciais.
-
----
-
-<p align="center"><sub>theGlobe · que comece o espetáculo ✨</sub></p>
