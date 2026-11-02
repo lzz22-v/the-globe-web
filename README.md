@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://theglobe.com.br/">
+  <a href="[https://theglobe.com.br/](https://the-globe-web.theglobeweb.workers.dev/)">
     <img alt="Acessar theGlobe" src="https://img.shields.io/badge/ACESSAR_O_SITE-a855f7?style=for-the-badge&logo=googlechrome&logoColor=white">
   </a>
 </p>
