@@ -19,7 +19,7 @@ email_optional = false
 # --- ADICIONE ESTE BLOCO AQUI ---
 [auth.external.google]
 enabled = true
-client_id = "COLE_SEU_CLIENT_ID_DO_GOOGLE_AQUI"
-secret = "COLE_SEU_SECRET_DO_GOOGLE_AQUI"
+client_id = "env(GOOGLE_CLIENT_ID)"
+secret = "env(GOOGLE_CLIENT_SECRET)"
 skip_nonce_check = true 
 # --------------------------------
