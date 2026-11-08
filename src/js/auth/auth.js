@@ -147,8 +147,8 @@ async function handleGoogleAuth() {
         const { data, error } = await supabase.auth.signInWithOAuth({
             provider: 'google',
             options: {
-                // Para onde o usuário deve voltar após autorizar no Google
-                redirectTo: window.location.origin + '/profile.html',
+                // Redirecionamento fixo para a URL publicada
+                redirectTo: 'https://the-globe-web.theglobeweb.workers.dev/profile.html',
                 queryParams: {
                     access_type: 'offline',
                     prompt: 'consent',
