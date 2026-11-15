@@ -79,14 +79,17 @@ async function init() {
     const sidebarEmail = document.getElementById('sidebar-email');
     const sidebarAvatar = document.getElementById('sidebar-avatar');
 
-    if (sidebarName) sidebarName.textContent = metadata?.full_name || metadata?.name || 'Usuário';
+    const displayName = metadata?.custom_name || metadata?.full_name || metadata?.name || 'Usuário';
+    const displayAvatar = metadata?.custom_avatar_url || metadata?.avatar_url;
+
+    if (sidebarName) sidebarName.textContent = displayName;
     if (sidebarEmail) sidebarEmail.textContent = currentUser.email || '';
-    if (sidebarAvatar && metadata?.avatar_url) sidebarAvatar.src = metadata.avatar_url;
+    if (sidebarAvatar && displayAvatar) sidebarAvatar.src = displayAvatar;
 
     renderPalette();
     setupDropzone();
-    await loadFolders();
-    await loadCharacters();
+    // OTIMIZAÇÃO: Carrega pastas e personagens em paralelo
+    await Promise.all([loadFolders(), loadCharacters()]);
 }
 
 async function loadFolders() {
@@ -111,7 +114,8 @@ async function loadFolders() {
 async function loadCharacters() {
     const { data, error } = await supabase
         .from('characters')
-        .select('*')
+        // OTIMIZAÇÃO: Busca apenas as colunas utilizadas na carteira e no modal
+        .select('id, folder_id, name, description, color, avatar_url, initials, relevance, created_at')
         .eq('user_id', currentUser.id);
 
     if (error) {
@@ -362,8 +366,7 @@ if (btnDeleteFolder) btnDeleteFolder.addEventListener('click', async () => {
     }
 
     currentFolderId = null;
-    await loadFolders();
-    await loadCharacters();
+    await Promise.all([loadFolders(), loadCharacters()]);
 });
 
 document.getElementById('btn-close-folder-modal')?.addEventListener('click', closeFolderModal);
@@ -494,18 +497,19 @@ function renderCharacters() {
     }
 
     if (isRoot) {
+        const fragment = document.createDocumentFragment();
         folders.forEach(folder => {
             const count = characters.filter(character => character.folderId === folder.id).length;
             const card = createFolderCard(folder.name, count, () => {
                 currentFolderId = folder.id;
                 renderCharacters();
             });
-            grid.appendChild(card);
+            fragment.appendChild(card);
         });
 
         const unfiledCharacters = characters.filter(character => !character.folderId);
         if (unfiledCharacters.length) {
-            grid.appendChild(createFolderCard('Sem pasta', unfiledCharacters.length, () => {
+            fragment.appendChild(createFolderCard('Sem pasta', unfiledCharacters.length, () => {
                 currentFolderId = UNFILED_FOLDER;
                 renderCharacters();
             }, true));
@@ -513,7 +517,9 @@ function renderCharacters() {
 
         if (!folders.length && !unfiledCharacters.length) {
             grid.innerHTML = '<p class="wallet-empty-state">Sua carteira está vazia. Crie uma pasta para organizar os personagens das suas sessões.</p>';
+            return;
         }
+        grid.appendChild(fragment);
         return;
     }
 
@@ -522,13 +528,15 @@ function renderCharacters() {
         return;
     }
 
+    // OTIMIZAÇÃO: Monta todos os cards em DocumentFragment antes de inserir no DOM
+    const fragment = document.createDocumentFragment();
     visibleCharacters.forEach(char => {
         const card = document.createElement('div');
         card.className = `char-card relevance-${char.relevance || 'secundario'}`;
         card.style.borderTop = `3px solid ${char.color}`;
 
         const avatarHTML = char.avatar
-            ? `<img src="${char.avatar}" alt="${char.name}" class="card-avatar" style="border: 2px solid ${char.color}">`
+            ? `<img src="${char.avatar}" alt="${char.name}" class="card-avatar" loading="lazy" style="border: 2px solid ${char.color}">`
             : `<div class="card-avatar-initials" style="color: ${char.color}; border: 2px solid ${char.color}">${char.initials || char.name.substring(0, 2).toUpperCase()}</div>`;
 
         card.innerHTML = `
@@ -561,8 +569,9 @@ function renderCharacters() {
 
         card.querySelector('.btn-edit').addEventListener('click', () => openModal(char));
         card.querySelector('.btn-delete').addEventListener('click', () => deleteCharacter(char.id));
-        grid.appendChild(card);
+        fragment.appendChild(card);
     });
+    grid.appendChild(fragment);
 }
 
 function syncRelevanceChoices() {
@@ -613,6 +622,7 @@ function getRelevanceSvgIcon(relevance) {
             return icon('Secundário', '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.2"/>');
     }
 }
+
 function createFolderCard(name, count, onOpen, isUnfiled = false) {
     const card = document.createElement('button');
     card.type = 'button';

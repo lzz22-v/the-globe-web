@@ -91,17 +91,17 @@ btnCloseAlert.addEventListener('click', () => {
 // ==========================================
 async function fetchUserStats(userId) {
     try {
-        // Busca apenas a quantidade exata de salas (muito mais rápido do que buscar os dados inteiros)
-        const { data: userRooms, error: roomsError } = await supabase
+        // head: true retorna apenas a contagem exata sem baixar registros
+        const { count, error: roomsError } = await supabase
             .from('rooms')
-            .select('id')
+            .select('id', { count: 'exact', head: true })
             .eq('created_by', userId);
 
         if (roomsError) throw roomsError;
 
         // Se o elemento statRooms existir no HTML, atualiza com o número do banco
         if (statRooms) {
-            statRooms.textContent = userRooms?.length || 0;
+            statRooms.textContent = count || 0;
         }
 
     } catch (error) {
@@ -123,7 +123,8 @@ async function initProfile() {
     const user = session.user;
     const metadata = user.user_metadata;
 
-    const userName = metadata?.full_name || metadata?.name || 'Usuário theGlobe';
+    // Prioriza custom_name para não ser sobrescrito pelo login com Google
+    const userName = metadata?.custom_name || metadata?.full_name || metadata?.name || 'Usuário theGlobe';
     const userEmail = user.email;
 
     sidebarName.textContent = userName;
@@ -131,7 +132,8 @@ async function initProfile() {
     sidebarEmail.textContent = userEmail;
     mainProfileEmail.textContent = userEmail;
 
-    const userAvatar = metadata?.avatar_url || DEFAULT_AVATAR;
+    // Prioriza custom_avatar_url para não ser sobrescrito pelo login com Google
+    const userAvatar = metadata?.custom_avatar_url || metadata?.avatar_url || DEFAULT_AVATAR;
     sidebarAvatar.src = userAvatar;
     mainProfileAvatar.src = userAvatar;
 
@@ -201,12 +203,18 @@ avatarFileInput.addEventListener('change', async (e) => {
             .from('avatars')
             .getPublicUrl(fileName);
 
-        // Atualiza perfil
+        // Atualiza perfil salvando em custom_avatar_url para persistir após login com Google
         const { error: updateError } = await supabase.auth.updateUser({
-            data: { avatar_url: publicUrl }
+            data: {
+                custom_avatar_url: publicUrl,
+                avatar_url: publicUrl
+            }
         });
 
         if (updateError) throw updateError;
+
+        mainProfileAvatar.src = publicUrl;
+        sidebarAvatar.src = publicUrl;
 
         // Oculta loading e exibe modal de SUCESSO com Vetor
         hideLoading();
@@ -222,6 +230,8 @@ avatarFileInput.addEventListener('change', async (e) => {
         // Reverte a imagem
         mainProfileAvatar.src = DEFAULT_AVATAR;
         sidebarAvatar.src = DEFAULT_AVATAR;
+    } finally {
+        URL.revokeObjectURL(objectUrl);
     }
 });
 
@@ -269,7 +279,11 @@ usernameForm.addEventListener('submit', async event => {
 
     showLoading('Salvando nome de usuário...');
     const { data, error } = await supabase.auth.updateUser({
-        data: { full_name: name, name }
+        data: {
+            custom_name: name,
+            full_name: name,
+            name
+        }
     });
     hideLoading();
 
@@ -279,7 +293,7 @@ usernameForm.addEventListener('submit', async event => {
         return;
     }
 
-    const savedName = data.user?.user_metadata?.full_name || name;
+    const savedName = data.user?.user_metadata?.custom_name || data.user?.user_metadata?.full_name || name;
     sidebarName.textContent = savedName;
     mainProfileName.textContent = savedName;
     closeUsernameModal();

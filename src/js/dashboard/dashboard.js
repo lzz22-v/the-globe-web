@@ -29,9 +29,9 @@ async function initDashboard() {
     currentUser = session.user;
     const metadata = currentUser.user_metadata;
 
-    if (sidebarName) sidebarName.textContent = metadata?.full_name || metadata?.name || 'Usuário';
+    if (sidebarName) sidebarName.textContent = metadata?.custom_name || metadata?.full_name || metadata?.name || 'Usuário';
     if (sidebarEmail) sidebarEmail.textContent = currentUser.email || '';
-    if (sidebarAvatar) sidebarAvatar.src = metadata?.avatar_url || DEFAULT_AVATAR;
+    if (sidebarAvatar) sidebarAvatar.src = metadata?.custom_avatar_url || metadata?.avatar_url || DEFAULT_AVATAR;
 
     await loadRooms();
     setupEventListeners();

@@ -1,7 +1,6 @@
 // =========================================
 // IMPORTAÇÃO DO SUPABASE
 // =========================================
-// (Precisaremos criar este arquivo no próximo passo)
 import { supabase } from '../config/supabase.js';
 
 // =========================================
@@ -46,8 +45,8 @@ function showLogin(e) {
 function showRegister(e) {
     if (e) e.preventDefault();
     
-    loginContainer.classList.remove('hidden');
-    registerContainer.classList.add('hidden');
+    loginContainer.classList.add('hidden');
+    registerContainer.classList.remove('hidden');
     
     brandSubtitle.innerHTML = textRegister;
 }

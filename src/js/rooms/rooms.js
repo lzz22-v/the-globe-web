@@ -157,6 +157,9 @@ function renderRooms(rooms) {
 
     roomsCount.textContent = `${rooms.length} sala${rooms.length !== 1 ? 's' : ''} ativa${rooms.length !== 1 ? 's' : ''}`;
 
+    // OTIMIZAÇÃO: Usando DocumentFragment para injetar tudo de uma vez no DOM e evitar engasgos
+    const fragment = document.createDocumentFragment();
+
     rooms.forEach(room => {
         const tags = room.tags || [];
         const tagsHTML = tags.map(tag => 
@@ -168,7 +171,8 @@ function renderRooms(rooms) {
         card.innerHTML = `
             <div class="room-image-wrapper">
                 <a href="chat.html?id=${room.id}">
-                    <img src="${room.image_url || 'https://placehold.co/800x450/1a1c23/9d4edd?text=Sem+Capa'}" alt="${room.title}" class="room-image">
+                    <!-- OTIMIZAÇÃO: loading="lazy" para economizar banda com imagens fora da tela -->
+                    <img src="${room.image_url || 'https://placehold.co/800x450/1a1c23/9d4edd?text=Sem+Capa'}" alt="${room.title}" class="room-image" loading="lazy">
                 </a>
                 <div class="room-host-label"></div>
                 <div class="room-tags">${tagsHTML}</div>
@@ -186,10 +190,7 @@ function renderRooms(rooms) {
             </div>
         `;
 
-        const hostName = room.created_by_name || room.creator_name || room.host_name ||
-            (room.created_by === currentUser.id
-                ? (currentUser.user_metadata?.full_name || currentUser.user_metadata?.name || 'Você')
-                : 'Anfitrião');
+        const hostName = room.created_by_name || 'Anfitrião';
         card.querySelector('.room-host-label').textContent = `Criada por ${hostName}`;
         
         const editBtn = card.querySelector('.btn-edit-room');
@@ -198,8 +199,10 @@ function renderRooms(rooms) {
             openEditModal(room);
         });
 
-        roomsGrid.appendChild(card);
+        fragment.appendChild(card);
     });
+    
+    roomsGrid.appendChild(fragment);
 }
 
 // ==========================================
@@ -216,19 +219,22 @@ async function initRooms() {
     currentUser = session.user;
     const metadata = currentUser.user_metadata;
 
-    sidebarName.textContent = metadata?.full_name || metadata?.name || 'Usuário theGlobe';
+    sidebarName.textContent = metadata?.custom_name || metadata?.full_name || metadata?.name || 'Usuário theGlobe';
     sidebarEmail.textContent = currentUser.email;
-    sidebarAvatar.src = metadata?.avatar_url || DEFAULT_AVATAR;
+    sidebarAvatar.src = metadata?.custom_avatar_url || metadata?.avatar_url || DEFAULT_AVATAR;
 
     fetchRooms();
 }
 
 async function fetchRooms() {
     try {
+        // OTIMIZAÇÃO: Definindo apenas as colunas vitais para a tela de listagem/edição
+        const roomFields = 'id, title, tags, members_count, image_url, wallpaper_url, created_by, created_at';
+
         // 1. Busca as salas que o usuário logado CRIOU
         const { data: myRooms, error: err1 } = await supabase
             .from('rooms')
-            .select('*')
+            .select(roomFields)
             .eq('created_by', currentUser.id);
 
         if (err1) throw err1;
@@ -236,7 +242,7 @@ async function fetchRooms() {
         // 2. Busca as salas em que o usuário FOI ACEITO (Membro)
         const { data: memberRoomsData, error: err2 } = await supabase
             .from('room_members')
-            .select('rooms(*)')
+            .select(`rooms(${roomFields})`)
             .eq('user_id', currentUser.id);
 
         if (err2) throw err2;
@@ -255,16 +261,26 @@ async function fetchRooms() {
         // Ordena da mais nova para a mais antiga
         uniqueRooms.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-        // O cliente Auth conhece o próprio nome, mas não pode ler os metadados
-        // privados dos outros usuários. A RPC retorna somente perfis da sala.
+        // OTIMIZAÇÃO: Cache em memória para evitar o Problema N+1 (múltiplas queries para o mesmo usuário)
+        const hostNameCache = new Map();
+        const currentUserMetadata = currentUser.user_metadata;
+        hostNameCache.set(currentUser.id, currentUserMetadata?.custom_name || currentUserMetadata?.full_name || currentUserMetadata?.name || 'Você');
+
         await Promise.all(uniqueRooms.map(async room => {
-            if (room.created_by === currentUser.id) {
-                room.created_by_name = currentUser.user_metadata?.full_name || currentUser.user_metadata?.name || 'Você';
+            // Se o nome do anfitrião já estiver no cache, usa ele e aborta a query repetida
+            if (hostNameCache.has(room.created_by)) {
+                room.created_by_name = hostNameCache.get(room.created_by);
                 return;
             }
+
+            // Se não estiver no cache, faz a query e salva no cache para as próximas salas dele
             const { data: profiles, error: profileError } = await supabase.rpc('get_room_user_profiles', { p_room_id: room.id });
             const hostProfile = (profiles || []).find(profile => profile.user_id === room.created_by);
-            if (hostProfile?.display_name) room.created_by_name = hostProfile.display_name;
+            const resolvedName = hostProfile?.display_name || 'Anfitrião';
+            
+            hostNameCache.set(room.created_by, resolvedName);
+            room.created_by_name = resolvedName;
+            
             if (profileError) console.error(`Não foi possível carregar o nome do anfitrião da sala ${room.id}.`, profileError);
         }));
 
@@ -407,7 +423,7 @@ if (btnJoinRoom) {
             }
 
             const metadata = currentUser.user_metadata;
-            const userName = metadata?.full_name || metadata?.name || 'Usuário theGlobe';
+            const userName = metadata?.custom_name || metadata?.full_name || metadata?.name || 'Usuário theGlobe';
 
             // 2. Cria o pedido na tabela room_requests
             const { error: reqError } = await supabase

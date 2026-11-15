@@ -169,9 +169,9 @@ async function initChat() {
 
     const metadata = session.user.user_metadata;
     chatState.currentUser.id = session.user.id;
-    chatState.currentUser.name = metadata?.full_name || metadata?.name || 'Usuário';
+    chatState.currentUser.name = metadata?.custom_name || metadata?.full_name || metadata?.name || 'Usuário';
     chatState.currentUser.email = session.user.email || '';
-    chatState.currentUser.avatar = metadata?.avatar_url || DEFAULT_AVATAR;
+    chatState.currentUser.avatar = metadata?.custom_avatar_url || metadata?.avatar_url || DEFAULT_AVATAR;
 
     if (sidebarName) sidebarName.textContent = chatState.currentUser.name;
     if (sidebarEmail) sidebarEmail.textContent = chatState.currentUser.email;
@@ -189,9 +189,19 @@ async function initChat() {
         await loadRoomDetails();
         setupPresence(); 
         setupMediaBroadcast();
-        await loadRoomUserProfiles();
-        await fetchRoomCharacters();
-        await fetchUserWalletCharacters();
+
+        // OTIMIZAÇÃO: Carrega perfis, personagens da sala e carteira em paralelo
+        await Promise.all([
+            loadRoomUserProfiles(),
+            fetchRoomCharacters(),
+            fetchUserWalletCharacters()
+        ]);
+
+        chatState.roomCharacters.forEach(char => {
+            if (char.ownerId && char.ownerId !== chatState.currentUser.id) {
+                char.ownerName = chatState.roomUsers.get(char.ownerId)?.name || chatState.onlineUsers.get(char.ownerId)?.name || char.ownerName || 'Usuário';
+            }
+        });
 
         const firstMyChar = chatState.roomCharacters.find(c => c.ownerId === chatState.currentUser.id);
         if (firstMyChar) {
@@ -540,7 +550,8 @@ async function startMediaBroadcast() {
     try { await mediaBroadcastVideo.play(); } catch (error) { console.error('Não foi possível iniciar o vídeo:', error); }
     await broadcastMediaState();
     clearInterval(chatState.mediaSyncTimer);
-    chatState.mediaSyncTimer = setInterval(broadcastMediaState, 300);
+    // OTIMIZAÇÃO: 1000ms evita estourar a cota de mensagens Realtime mantendo sincronia fina
+    chatState.mediaSyncTimer = setInterval(broadcastMediaState, 1000);
     if (mediaBroadcast.requestFullscreen) mediaBroadcast.requestFullscreen().catch(() => {});
 }
 
@@ -686,9 +697,10 @@ async function fetchUserWalletCharacters() {
             .eq('user_id', chatState.currentUser.id)
             .order('created_at', { ascending: true }),
         supabase
-        .from('characters')
-        .select('*')
-        .eq('user_id', chatState.currentUser.id)
+            .from('characters')
+            // OTIMIZAÇÃO: Seleciona apenas os campos usados na carteira da sala
+            .select('id, folder_id, name, avatar_url, initials, color')
+            .eq('user_id', chatState.currentUser.id)
     ]);
 
     if (folderError) {
@@ -808,7 +820,7 @@ async function syncNewMessages() {
     }
 
     await hydrateMessageReplies(data || []);
-    (data || []).forEach(appendMessageToUI);
+    (data || []).forEach(msg => appendMessageToUI(msg));
 }
 
 function startMessageSyncLoop() {
@@ -822,8 +834,10 @@ function startMessageSyncLoop() {
 function renderAllMessages(messages) {
     if (!chatMessagesContainer) return;
     
-    chatMessagesContainer.innerHTML = '';
-    messages.forEach(msg => appendMessageToUI(msg));
+    // OTIMIZAÇÃO: Monta todo o histórico em DocumentFragment antes de injetar no DOM
+    const fragment = document.createDocumentFragment();
+    messages.forEach(msg => appendMessageToUI(msg, { container: fragment, skipScroll: true }));
+    chatMessagesContainer.replaceChildren(fragment);
     scrollToLatestMessage();
 }
 
@@ -841,10 +855,10 @@ function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 }
 
-function appendMessageToUI(msg) {
-    if (!chatMessagesContainer) return;
+function appendMessageToUI(msg, { container = chatMessagesContainer, skipScroll = false } = {}) {
+    if (!container) return;
     if (msg.id) chatState.messagesById.set(String(msg.id), msg);
-    if (msg.id && Array.from(chatMessagesContainer.children).some(element => element.dataset.messageId === String(msg.id))) return;
+    if (msg.id && Array.from(container.children).some(element => element.dataset.messageId === String(msg.id))) return;
     rememberMessageTimestamp(msg.created_at);
 
     const isMine = msg.user_id === chatState.currentUser.id;
@@ -919,11 +933,11 @@ function appendMessageToUI(msg) {
     `;
 
     const timestamp = Number(msgElement.dataset.createdAt);
-    const nextMessage = Array.from(chatMessagesContainer.children).find(element =>
+    const nextMessage = Array.from(container.children).find(element =>
         Number(element.dataset.createdAt || 0) > timestamp
     );
-    chatMessagesContainer.insertBefore(msgElement, nextMessage || null);
-    scrollToLatestMessage();
+    container.insertBefore(msgElement, nextMessage || null);
+    if (!skipScroll) scrollToLatestMessage();
 }
 
 function updateMessageAvatars() {
@@ -1095,22 +1109,46 @@ function applyMessageUpdate(updated) {
         }
     });
 }
+
 async function processIncomingMessage(newMsg) {
+    // OTIMIZAÇÃO: Verifica primeiro o cache em memória antes de consultar o Supabase
     if (newMsg.character_id && !newMsg.characters) {
-        const { data: charData } = await supabase
-            .from('characters')
-            .select('id, name, avatar_url, color, initials, description')
-            .eq('id', newMsg.character_id)
-            .single();
-        newMsg.characters = charData;
+        const cachedChar = chatState.roomCharacters.find(c => c.id === newMsg.character_id);
+        if (cachedChar) {
+            newMsg.characters = {
+                id: cachedChar.id,
+                name: cachedChar.name,
+                avatar_url: cachedChar.avatar,
+                color: cachedChar.color,
+                initials: cachedChar.initials,
+                description: cachedChar.description
+            };
+        } else {
+            const { data: charData } = await supabase
+                .from('characters')
+                .select('id, name, avatar_url, color, initials, description')
+                .eq('id', newMsg.character_id)
+                .single();
+            newMsg.characters = charData;
+        }
     }
     if (newMsg.reply_to_id && !newMsg.reply) {
-        const { data: reply } = await supabase
-            .from('messages')
-            .select('id, content, user_id, deleted_at')
-            .eq('id', newMsg.reply_to_id)
-            .maybeSingle();
-        newMsg.reply = reply;
+        const cachedReply = chatState.messagesById.get(String(newMsg.reply_to_id));
+        if (cachedReply) {
+            newMsg.reply = {
+                id: cachedReply.id,
+                content: cachedReply.content,
+                user_id: cachedReply.user_id,
+                deleted_at: cachedReply.deleted_at
+            };
+        } else {
+            const { data: reply } = await supabase
+                .from('messages')
+                .select('id, content, user_id, deleted_at')
+                .eq('id', newMsg.reply_to_id)
+                .maybeSingle();
+            newMsg.reply = reply;
+        }
     }
     const charData = newMsg.characters;
     if (charData && !chatState.roomCharacters.some(character => character.id === charData.id)) {
@@ -1337,7 +1375,7 @@ function renderDeck() {
         charItem.setAttribute('data-id', char.id);
 
         let avatarImgOrInitials = char.avatar 
-            ? `<img src="${char.avatar}" alt="${char.name}">` 
+            ? `<img src="${char.avatar}" alt="${char.name}" loading="lazy">` 
             : `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #1a1b26; color: ${char.color}; font-weight: bold;">${char.initials}</div>`;
 
         charItem.innerHTML = `
@@ -1370,6 +1408,7 @@ function renderDeck() {
     const pageCount = Math.max(1, Math.ceil(characterItems.length / MOBILE_CHARACTER_PAGE_SIZE));
     activeCharacterPage = Math.min(activeCharacterPage, pageCount - 1);
 
+    const fragment = document.createDocumentFragment();
     for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
         const page = document.createElement('div');
         page.className = 'char-page';
@@ -1378,7 +1417,7 @@ function renderDeck() {
         characterItems
             .slice(pageIndex * MOBILE_CHARACTER_PAGE_SIZE, (pageIndex + 1) * MOBILE_CHARACTER_PAGE_SIZE)
             .forEach(item => page.appendChild(item));
-        characterList.appendChild(page);
+        fragment.appendChild(page);
     }
 
     const addCard = document.createElement('div');
@@ -1388,7 +1427,8 @@ function renderDeck() {
         <span>Novo</span>
     `;
     addCard.addEventListener('click', openAddCharacterModal);
-    characterList.appendChild(addCard);
+    fragment.appendChild(addCard);
+    characterList.appendChild(fragment);
 
     renderCharacterPageIndicators(pageCount);
     updateCharacterPagePosition();
@@ -1497,6 +1537,8 @@ function renderModalCharacterGrid() {
     roomCharacterSelectGrid.style.gap = '16px';
     roomCharacterSelectGrid.innerHTML = '';
 
+    const fragment = document.createDocumentFragment();
+
     const addFolderCard = (folderId, name, count, isUnfiled = false) => {
         const card = document.createElement('button');
         card.type = 'button';
@@ -1507,14 +1549,14 @@ function renderModalCharacterGrid() {
             activeWalletFolderId = folderId;
             renderModalCharacterGrid();
         });
-        roomCharacterSelectGrid.appendChild(card);
+        fragment.appendChild(card);
     };
 
     if (activeWalletFolderId === null) {
         const heading = document.createElement('p');
         heading.className = 'room-wallet-folder-heading';
         heading.textContent = 'Escolha uma pasta para ver os personagens';
-        roomCharacterSelectGrid.appendChild(heading);
+        fragment.appendChild(heading);
 
         userWalletFolders.forEach(folder => {
             const count = userWalletCharacters.filter(char => char.folderId === folder.id).length;
@@ -1527,8 +1569,9 @@ function renderModalCharacterGrid() {
             const empty = document.createElement('p');
             empty.className = 'room-wallet-empty';
             empty.textContent = 'Sua carteira está vazia. Crie pastas e personagens na Carteira de personagens.';
-            roomCharacterSelectGrid.appendChild(empty);
+            fragment.appendChild(empty);
         }
+        roomCharacterSelectGrid.appendChild(fragment);
         return;
     }
 
@@ -1540,7 +1583,7 @@ function renderModalCharacterGrid() {
         activeWalletFolderId = null;
         renderModalCharacterGrid();
     });
-    roomCharacterSelectGrid.appendChild(backButton);
+    fragment.appendChild(backButton);
 
     const folderName = activeWalletFolderId === UNFILED_WALLET_FOLDER
         ? 'Sem pasta'
@@ -1548,7 +1591,7 @@ function renderModalCharacterGrid() {
     const heading = document.createElement('p');
     heading.className = 'room-wallet-folder-heading';
     heading.textContent = folderName;
-    roomCharacterSelectGrid.appendChild(heading);
+    fragment.appendChild(heading);
 
     const folderCharacters = userWalletCharacters.filter(char => activeWalletFolderId === UNFILED_WALLET_FOLDER
         ? !char.folderId
@@ -1558,7 +1601,8 @@ function renderModalCharacterGrid() {
         const empty = document.createElement('p');
         empty.className = 'room-wallet-empty';
         empty.textContent = 'Esta pasta ainda não tem personagens.';
-        roomCharacterSelectGrid.appendChild(empty);
+        fragment.appendChild(empty);
+        roomCharacterSelectGrid.appendChild(fragment);
         return;
     }
 
@@ -1576,7 +1620,7 @@ function renderModalCharacterGrid() {
         card.style.cursor = 'pointer';
 
         const avatarHTML = char.avatar
-            ? `<img src="${char.avatar}" alt="${char.name}" style="width:52px;height:52px;border-radius:10px;object-fit:cover;">`
+            ? `<img src="${char.avatar}" alt="${char.name}" loading="lazy" style="width:52px;height:52px;border-radius:10px;object-fit:cover;">`
             : `<div style="width:52px;height:52px;border-radius:10px;border:2px dashed ${char.color};display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;">${char.initials}</div>`;
         card.innerHTML = `<div style="margin-bottom:10px;">${avatarHTML}</div><span class="room-wallet-character-name"></span><button type="button" class="room-wallet-character-toggle">${isSelected ? '✓ Adicionado' : '+ Adicionar'}</button>`;
         card.querySelector('.room-wallet-character-name').textContent = char.name;
@@ -1586,9 +1630,12 @@ function renderModalCharacterGrid() {
             else selectedWalletCharIds.add(char.id);
             renderModalCharacterGrid();
         });
-        roomCharacterSelectGrid.appendChild(card);
+        fragment.appendChild(card);
     });
+
+    roomCharacterSelectGrid.appendChild(fragment);
 }
+
 async function confirmAddCharacters() {
     if (!chatState.roomId) return;
 
