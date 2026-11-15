@@ -40,10 +40,7 @@
 
     .auth-container { height: 100vh; height: 100dvh; overflow-y: auto; flex-direction: column; }
     .visual-section { flex: 0 0 auto; min-height: 180px; padding: 1rem; }
-    .globe-graphic { width: min(38vw, 150px); height: min(38vw, 150px); margin-bottom: .25rem; }
-    .orbit-path.path-1 { width: 150px; height: 150px; }
-    .orbit-path.path-2 { width: 120px; height: 120px; }
-    .orbit-path.path-3 { width: 170px; height: 170px; }
+    .logo-mark { width: min(38vw, 150px); margin-bottom: .25rem; }
     .brand-title { font-size: 1.8rem; margin: .2rem 0; }
     .brand-subtitle { font-size: .82rem; max-width: 320px; }
     .form-section { flex: 1 0 auto; align-items: flex-start; padding: 1.5rem 1.15rem 2rem; }

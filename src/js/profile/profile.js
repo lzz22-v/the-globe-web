@@ -112,12 +112,15 @@ async function fetchUserStats(userId) {
 // ==========================================
 // 4. INICIALIZAÇÃO DA PÁGINA
 // ==========================================
-async function initProfile() {
-    const { data: { session }, error } = await supabase.auth.getSession();
+let profileRendered = false;
 
-    if (error || !session) {
-        window.location.replace('index.html');
-        return;
+function renderProfile(session) {
+    if (profileRendered || !session) return;
+    profileRendered = true;
+
+    // Remove parâmetros OAuth (?code=... ou #access_token=...) da barra de endereço
+    if (window.location.search.includes('code=') || window.location.hash.includes('access_token=')) {
+        window.history.replaceState({}, document.title, window.location.pathname);
     }
 
     const user = session.user;
@@ -148,7 +151,54 @@ async function initProfile() {
 
     // Chama a função que busca o número de salas
     if (statRooms) statRooms.textContent = '…';
-    await fetchUserStats(user.id);
+    fetchUserStats(user.id);
+}
+
+async function initProfile() {
+    const searchParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const oauthError = searchParams.get('error_description') || hashParams.get('error_description') || searchParams.get('error') || hashParams.get('error');
+
+    if (oauthError) {
+        console.error('Erro no retorno do login com Google:', oauthError);
+        window.location.replace('index.html');
+        return;
+    }
+
+    const hasOAuthCallback = searchParams.has('code') || hashParams.has('access_token');
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        if (session && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED')) {
+            subscription.unsubscribe();
+            renderProfile(session);
+        }
+    });
+
+    const { data: { session }, error } = await supabase.auth.getSession();
+
+    if (session) {
+        subscription.unsubscribe();
+        renderProfile(session);
+        return;
+    }
+
+    if (hasOAuthCallback && !error) {
+        // Aguarda a troca do código PKCE pelo token antes de redirecionar para o login
+        setTimeout(async () => {
+            if (profileRendered) return;
+            const { data: { session: lateSession } } = await supabase.auth.getSession();
+            subscription.unsubscribe();
+            if (lateSession) {
+                renderProfile(lateSession);
+            } else {
+                window.location.replace('index.html');
+            }
+        }, 4000);
+        return;
+    }
+
+    subscription.unsubscribe();
+    window.location.replace('index.html');
 }
 
 // ==========================================

@@ -118,13 +118,41 @@
                 </div>
 
                 <div class="form-group">
-                    <label class="form-label" for="input-char-relevance">RELEVÂNCIA / ETIQUETA</label>
-                    <select id="input-char-relevance" class="form-input">
+                    <label class="form-label" id="relevance-group-label">RELEVÂNCIA / ETIQUETA</label>
+                    <select id="input-char-relevance" class="relevance-value-source" aria-hidden="true" tabindex="-1">
                         <option value="protagonista">Protagonista (Fixado no topo)</option>
                         <option value="coadjuvante">Coadjuvante</option>
                         <option value="secundario" selected>Secundário</option>
                         <option value="figurante">Figurante</option>
+                        <option value="multidao">Multidão</option>
+                        <option value="narrador">Narrador</option>
                     </select>
+                    <div class="relevance-choice-list" id="relevance-choice-list" role="radiogroup" aria-labelledby="relevance-group-label">
+                        <button type="button" class="relevance-choice" role="radio" aria-checked="false" data-relevance="protagonista">
+                            <span class="relevance-choice-icon" aria-hidden="true"></span>
+                            <span class="relevance-choice-text">Protagonista</span>
+                        </button>
+                        <button type="button" class="relevance-choice" role="radio" aria-checked="false" data-relevance="coadjuvante">
+                            <span class="relevance-choice-icon" aria-hidden="true"></span>
+                            <span class="relevance-choice-text">Coadjuvante</span>
+                        </button>
+                        <button type="button" class="relevance-choice" role="radio" aria-checked="true" data-relevance="secundario">
+                            <span class="relevance-choice-icon" aria-hidden="true"></span>
+                            <span class="relevance-choice-text">Secundário</span>
+                        </button>
+                        <button type="button" class="relevance-choice" role="radio" aria-checked="false" data-relevance="figurante">
+                            <span class="relevance-choice-icon" aria-hidden="true"></span>
+                            <span class="relevance-choice-text">Figurante</span>
+                        </button>
+                        <button type="button" class="relevance-choice" role="radio" aria-checked="false" data-relevance="multidao">
+                            <span class="relevance-choice-icon" aria-hidden="true"></span>
+                            <span class="relevance-choice-text">Multidão</span>
+                        </button>
+                        <button type="button" class="relevance-choice" role="radio" aria-checked="false" data-relevance="narrador">
+                            <span class="relevance-choice-icon" aria-hidden="true"></span>
+                            <span class="relevance-choice-text">Narrador</span>
+                        </button>
+                    </div>
                 </div>
 
                 <div class="form-group">

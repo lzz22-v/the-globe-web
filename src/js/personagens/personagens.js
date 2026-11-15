@@ -56,9 +56,11 @@ const UNFILED_FOLDER = '__unfiled__';
 // Pesos de relevância para fixar protagonistas no topo
 const RELEVANCE_WEIGHT = {
     'protagonista': 1,
-    'coadjuvante': 2,
-    'secundario': 3,
-    'figurante': 4
+    'narrador': 2,
+    'coadjuvante': 3,
+    'secundario': 4,
+    'figurante': 5,
+    'multidao': 6
 };
 
 // ==========================================
@@ -474,8 +476,8 @@ function renderCharacters() {
 
     // ORDENAÇÃO POR RELEVÂNCIA (Protagonistas fixados no topo) E DESEMPATE POR DATA
     visibleCharacters.sort((a, b) => {
-        const weightA = RELEVANCE_WEIGHT[a.relevance] || 3;
-        const weightB = RELEVANCE_WEIGHT[b.relevance] || 3;
+        const weightA = RELEVANCE_WEIGHT[a.relevance] || 4;
+        const weightB = RELEVANCE_WEIGHT[b.relevance] || 4;
 
         if (weightA !== weightB) {
             return weightA - weightB; // Menor peso (1 = Protagonista) vem primeiro
@@ -602,6 +604,8 @@ function formatRelevanceLabel(relevance) {
         case 'coadjuvante': return 'Coadjuvante';
         case 'secundario': return 'Secundário';
         case 'figurante': return 'Figurante';
+        case 'multidao': return 'Multidão';
+        case 'narrador': return 'Narrador';
         default: return 'Secundário';
     }
 }
@@ -618,6 +622,10 @@ function getRelevanceSvgIcon(relevance) {
             return icon('Secundário', '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.2"/><path d="M12 1.5v2M22.5 12h-2"/>');
         case 'figurante':
             return icon('Figurante', '<circle cx="7" cy="9" r="2"/><circle cx="12" cy="7" r="2"/><circle cx="17" cy="9" r="2"/><path d="M3.5 17a3.5 3.5 0 0 1 7 0M8.5 16a3.5 3.5 0 0 1 7 0M13.5 17a3.5 3.5 0 0 1 7 0"/>');
+        case 'multidao':
+            return icon('Multidão', '<circle cx="12" cy="6.5" r="2"/><circle cx="6.5" cy="8" r="1.8"/><circle cx="17.5" cy="8" r="1.8"/><circle cx="9" cy="11.5" r="2.2"/><circle cx="15" cy="11.5" r="2.2"/><path d="M4.5 19.5a4.5 4.5 0 0 1 9 0"/><path d="M10.5 19.5a4.5 4.5 0 0 1 9 0"/><path d="M2.5 16.5a3.5 3.5 0 0 1 4.2-2.2"/><path d="M21.5 16.5a3.5 3.5 0 0 0-4.2-2.2"/>');
+        case 'narrador':
+            return icon('Narrador', '<path d="M2 4h6a4 4 0 0 1 4 4v12a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v12a3 3 0 0 1 3-3h7z"/>');
         default:
             return icon('Secundário', '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.2"/>');
     }

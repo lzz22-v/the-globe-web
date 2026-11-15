@@ -1,6 +1,7 @@
 import { supabase } from '../config/supabase.js';
 
 const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ccc'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E";
+const MESSAGES_PAGE_SIZE = 10;
 
 // ==========================================
 // 1. ÍCONES VETORIAIS (SVG)
@@ -13,7 +14,8 @@ const ICONS = {
     edit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>`,
     trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
     hand: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0v5"></path><path d="M14 10V4a2 2 0 0 0-4 0v6"></path><path d="M10 10.5V6a2 2 0 0 0-4 0v8"></path><path d="M18 8a2 2 0 0 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>`,
-    user: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>`
+    user: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>`,
+    spinner: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"></circle><path d="M21 12a9 9 0 0 0-9-9"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.75s" repeatCount="indefinite"/></path></svg>`
 };
 
 // ==========================================
@@ -34,6 +36,12 @@ const chatState = {
     pendingMessageEvents: [],
     messagesLoaded: false,
     latestMessageTimestamp: 0,
+    oldestMessageCursor: null,
+    hasMoreOlderMessages: false,
+    isLoadingOlderMessages: false,
+    isResettingRoomState: false,
+    wasHiddenOrLeft: false,
+    renderedMessageIds: new Set(),
     messageSyncTimer: null,
     messageRealtimeConnected: false,
     typingUsers: new Map(),
@@ -189,12 +197,15 @@ async function initChat() {
         await loadRoomDetails();
         setupPresence(); 
         setupMediaBroadcast();
+        subscribeToMessages();
+        setupMessageHistoryScroll();
 
-        // OTIMIZAÇÃO: Carrega perfis, personagens da sala e carteira em paralelo
+        // Carrega perfis, personagens da sala, carteira e as 10 mensagens mais recentes em paralelo
         await Promise.all([
             loadRoomUserProfiles(),
             fetchRoomCharacters(),
-            fetchUserWalletCharacters()
+            fetchUserWalletCharacters(),
+            fetchMessages()
         ]);
 
         chatState.roomCharacters.forEach(char => {
@@ -208,8 +219,6 @@ async function initChat() {
             chatState.activeCharacterId = firstMyChar.id;
         }
 
-        subscribeToMessages();
-        await fetchMessages();
         startMessageSyncLoop();
     } else if (roomTitle) {
         roomTitle.textContent = "Sala Desconhecida (Acesse pelo Dashboard)";
@@ -722,7 +731,7 @@ async function fetchUserWalletCharacters() {
 }
 
 // ==========================================
-// 5. CARREGAR E RENDERIZAR MENSAGENS
+// 5. CARREGAR E RENDERIZAR MENSAGENS (PAGINAÇÃO EM SLOTS DE 10)
 // ==========================================
 const MESSAGE_BASE_SELECT = `
     id, content, created_at, user_id, is_encenacao,
@@ -738,14 +747,26 @@ function isOptionalMessageSchemaError(error) {
     return /42703|pgrst200|pgrst204|reply_to_id|deleted_at|relationship.*messages|schema cache/.test(details);
 }
 
-async function queryRoomMessages(since = null) {
+async function queryRoomMessages({ since = null, before = null, limit = null, ascending = true } = {}) {
     const runQuery = async select => {
         let query = supabase
             .from('messages')
             .select(select)
             .eq('room_id', chatState.roomId);
+
         if (since) query = query.gte('created_at', since);
-        return query.order('created_at', { ascending: true });
+        if (before?.created_at && before?.id) {
+            query = query.or(`created_at.lt."${before.created_at}",and(created_at.eq."${before.created_at}",id.lt."${before.id}")`);
+        } else if (before?.created_at) {
+            query = query.lt('created_at', before.created_at);
+        }
+
+        query = query
+            .order('created_at', { ascending })
+            .order('id', { ascending });
+
+        if (limit) query = query.limit(limit);
+        return query;
     };
 
     let result = await runQuery(MESSAGE_FEATURE_SELECT);
@@ -781,24 +802,255 @@ async function hydrateMessageReplies(messages) {
     });
 }
 
+function updateOldestCursor(messages) {
+    if (!messages?.length) return;
+    const oldest = messages[0];
+    if (!oldest?.created_at) return;
+
+    if (!chatState.oldestMessageCursor) {
+        chatState.oldestMessageCursor = { created_at: oldest.created_at, id: oldest.id };
+        return;
+    }
+
+    const currentOldestTs = Date.parse(chatState.oldestMessageCursor.created_at);
+    const candidateTs = Date.parse(oldest.created_at);
+    if (candidateTs < currentOldestTs || (candidateTs === currentOldestTs && String(oldest.id) < String(chatState.oldestMessageCursor.id))) {
+        chatState.oldestMessageCursor = { created_at: oldest.created_at, id: oldest.id };
+    }
+}
+
+function showOlderMessagesLoader() {
+    if (!chatMessagesContainer) return;
+    let loader = document.getElementById('older-messages-loader');
+    if (!loader) {
+        loader = document.createElement('div');
+        loader.id = 'older-messages-loader';
+        loader.setAttribute('role', 'status');
+        loader.setAttribute('aria-live', 'polite');
+        loader.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 16px;margin:0 auto 12px;width:fit-content;border-radius:999px;background:rgba(24,25,36,0.92);border:1px solid #2f334d;color:#c084fc;font-size:12px;font-weight:500;';
+        loader.innerHTML = `${ICONS.spinner}<span>Carregando mensagens anteriores...</span>`;
+    }
+    chatMessagesContainer.insertBefore(loader, chatMessagesContainer.firstChild);
+}
+
+function hideOlderMessagesLoader() {
+    document.getElementById('older-messages-loader')?.remove();
+}
+
+function clearRoomTransientState() {
+    // Limpa mensagens carregadas
+    chatState.renderedMessageIds.clear();
+    chatState.messagesById.clear();
+    chatState.pendingMessageEvents.length = 0;
+    chatState.oldestMessageCursor = null;
+    chatState.hasMoreOlderMessages = false;
+    chatState.isLoadingOlderMessages = false;
+    chatState.latestMessageTimestamp = 0;
+    chatState.messagesLoaded = false;
+    hideOlderMessagesLoader();
+    if (chatMessagesContainer) {
+        chatMessagesContainer.replaceChildren();
+    }
+
+    // Limpa personagens da sala carregados em memória e no deck
+    chatState.roomCharacters = [];
+    chatState.activeCharacterId = null;
+    activeCharacterPage = 0;
+    removeContextMenu();
+    if (characterProfileModal) {
+        characterProfileModal.classList.add('hidden');
+    }
+    if (characterList) {
+        characterList.replaceChildren();
+        characterList.style.transform = '';
+    }
+    if (characterPageIndicators) {
+        characterPageIndicators.replaceChildren();
+        characterPageIndicators.hidden = true;
+    }
+    updateInputUI();
+}
+
+async function resetRoomToInitialSnapshot() {
+    if (!chatState.roomId || chatState.isResettingRoomState) return;
+    chatState.isResettingRoomState = true;
+    try {
+        clearRoomTransientState();
+        await Promise.all([
+            fetchRoomCharacters(),
+            fetchMessages()
+        ]);
+
+        chatState.roomCharacters.forEach(char => {
+            if (char.ownerId && char.ownerId !== chatState.currentUser.id) {
+                char.ownerName = chatState.roomUsers.get(char.ownerId)?.name || chatState.onlineUsers.get(char.ownerId)?.name || char.ownerName || 'Usuário';
+            }
+        });
+
+        const firstMyChar = chatState.roomCharacters.find(c => c.ownerId === chatState.currentUser.id);
+        if (firstMyChar) {
+            chatState.activeCharacterId = firstMyChar.id;
+        }
+
+        renderDeck();
+        updateInputUI();
+    } finally {
+        chatState.isResettingRoomState = false;
+    }
+}
+
+function setupPageLifecycleReset() {
+    // Limpa mensagens e personagens assim que o usuário sai da página
+    window.addEventListener('pagehide', () => {
+        chatState.wasHiddenOrLeft = true;
+        clearRoomTransientState();
+    });
+
+    window.addEventListener('beforeunload', () => {
+        chatState.wasHiddenOrLeft = true;
+        clearRoomTransientState();
+    });
+
+    // Quando o usuário volta para a página (inclusive via bfcache ou troca de aba/app), recarrega apenas as 10 últimas mensagens e os personagens da sala
+    window.addEventListener('pageshow', event => {
+        if (event.persisted || chatState.wasHiddenOrLeft) {
+            chatState.wasHiddenOrLeft = false;
+            resetRoomToInitialSnapshot();
+        }
+    });
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+            chatState.wasHiddenOrLeft = true;
+            clearRoomTransientState();
+        } else if (document.visibilityState === 'visible' && chatState.wasHiddenOrLeft) {
+            chatState.wasHiddenOrLeft = false;
+            resetRoomToInitialSnapshot();
+        }
+    });
+}
+
 async function fetchMessages() {
     if (!chatMessagesContainer) return;
 
-    const { data, error } = await queryRoomMessages();
+    chatState.renderedMessageIds.clear();
+    chatState.messagesById.clear();
+    chatState.oldestMessageCursor = null;
+
+    const { data, error } = await queryRoomMessages({
+        limit: MESSAGES_PAGE_SIZE,
+        ascending: false
+    });
 
     if (error) {
         console.error("Erro ao buscar mensagens:", error);
         return;
     }
 
-    await hydrateMessageReplies(data || []);
-    renderAllMessages(data || []);
-    (data || []).forEach(msg => rememberMessageTimestamp(msg.created_at));
+    const batch = (data || []).reverse();
+    chatState.hasMoreOlderMessages = (data || []).length === MESSAGES_PAGE_SIZE;
+    updateOldestCursor(batch);
+
+    await hydrateMessageReplies(batch);
+    renderAllMessages(batch);
+    batch.forEach(msg => rememberMessageTimestamp(msg.created_at));
     chatState.messagesLoaded = true;
 
     const pendingEvents = chatState.pendingMessageEvents.splice(0);
     pendingEvents.forEach(msg => appendMessageToUI(msg));
     scrollToLatestMessage();
+}
+
+async function loadOlderMessages() {
+    if (
+        !chatMessagesContainer ||
+        !chatState.roomId ||
+        !chatState.messagesLoaded ||
+        !chatState.hasMoreOlderMessages ||
+        chatState.isLoadingOlderMessages ||
+        !chatState.oldestMessageCursor
+    ) {
+        return;
+    }
+
+    chatState.isLoadingOlderMessages = true;
+    const beforeLoaderScrollHeight = chatMessagesContainer.scrollHeight;
+    const beforeLoaderScrollTop = chatMessagesContainer.scrollTop;
+    showOlderMessagesLoader();
+    // Mantém a posição visual mesmo com a entrada do indicador no topo
+    chatMessagesContainer.scrollTop = beforeLoaderScrollTop + (chatMessagesContainer.scrollHeight - beforeLoaderScrollHeight);
+
+    try {
+        const { data, error } = await queryRoomMessages({
+            before: chatState.oldestMessageCursor,
+            limit: MESSAGES_PAGE_SIZE,
+            ascending: false
+        });
+
+        if (error) {
+            console.error('Erro ao carregar mensagens anteriores:', error);
+            return;
+        }
+
+        const rawRows = data || [];
+        chatState.hasMoreOlderMessages = rawRows.length === MESSAGES_PAGE_SIZE;
+
+        const olderBatch = rawRows
+            .reverse()
+            .filter(msg => !msg.id || !chatState.renderedMessageIds.has(String(msg.id)));
+
+        if (!olderBatch.length) return;
+
+        updateOldestCursor(olderBatch);
+        await hydrateMessageReplies(olderBatch);
+
+        hideOlderMessagesLoader();
+        const previousScrollHeight = chatMessagesContainer.scrollHeight;
+        const previousScrollTop = chatMessagesContainer.scrollTop;
+
+        const fragment = document.createDocumentFragment();
+        olderBatch.forEach(msg => appendMessageToUI(msg, { container: fragment, skipScroll: true }));
+        chatMessagesContainer.insertBefore(fragment, chatMessagesContainer.firstChild);
+
+        const addedHeight = chatMessagesContainer.scrollHeight - previousScrollHeight;
+        chatMessagesContainer.scrollTop = previousScrollTop + addedHeight;
+    } finally {
+        hideOlderMessagesLoader();
+        chatState.isLoadingOlderMessages = false;
+    }
+}
+
+function setupMessageHistoryScroll() {
+    if (!chatMessagesContainer) return;
+
+    let touchStartY = null;
+
+    chatMessagesContainer.addEventListener('scroll', () => {
+        if (!chatState.messagesLoaded || !chatState.hasMoreOlderMessages || chatState.isLoadingOlderMessages) return;
+        if (chatMessagesContainer.scrollTop <= 80) {
+            loadOlderMessages();
+        }
+    }, { passive: true });
+
+    // Caso as 10 mensagens iniciais não preencham toda a altura da tela, permite carregar ao tentar subir
+    chatMessagesContainer.addEventListener('wheel', event => {
+        if (event.deltaY < 0 && chatMessagesContainer.scrollTop <= 0) {
+            loadOlderMessages();
+        }
+    }, { passive: true });
+
+    chatMessagesContainer.addEventListener('touchstart', event => {
+        touchStartY = event.touches?.[0]?.clientY ?? null;
+    }, { passive: true });
+
+    chatMessagesContainer.addEventListener('touchmove', event => {
+        if (touchStartY === null) return;
+        const currentY = event.touches?.[0]?.clientY ?? touchStartY;
+        if (currentY - touchStartY > 36 && chatMessagesContainer.scrollTop <= 0) {
+            touchStartY = null;
+            loadOlderMessages();
+        }
+    }, { passive: true });
 }
 
 function rememberMessageTimestamp(value) {
@@ -812,7 +1064,7 @@ async function syncNewMessages() {
     if (!chatState.roomId || !chatState.messagesLoaded) return;
 
     const since = new Date(Math.max(0, chatState.latestMessageTimestamp - 5000)).toISOString();
-    const { data, error } = await queryRoomMessages(since);
+    const { data, error } = await queryRoomMessages({ since, ascending: true });
 
     if (error) {
         console.error('Erro ao sincronizar mensagens recentes:', error);
@@ -857,8 +1109,12 @@ function escapeHtml(value) {
 
 function appendMessageToUI(msg, { container = chatMessagesContainer, skipScroll = false } = {}) {
     if (!container) return;
-    if (msg.id) chatState.messagesById.set(String(msg.id), msg);
-    if (msg.id && Array.from(container.children).some(element => element.dataset.messageId === String(msg.id))) return;
+    if (msg.id) {
+        const msgKey = String(msg.id);
+        chatState.messagesById.set(msgKey, msg);
+        if (chatState.renderedMessageIds.has(msgKey)) return;
+        chatState.renderedMessageIds.add(msgKey);
+    }
     rememberMessageTimestamp(msg.created_at);
 
     const isMine = msg.user_id === chatState.currentUser.id;
@@ -934,7 +1190,7 @@ function appendMessageToUI(msg, { container = chatMessagesContainer, skipScroll 
 
     const timestamp = Number(msgElement.dataset.createdAt);
     const nextMessage = Array.from(container.children).find(element =>
-        Number(element.dataset.createdAt || 0) > timestamp
+        element.dataset.messageId && Number(element.dataset.createdAt || 0) > timestamp
     );
     container.insertBefore(msgElement, nextMessage || null);
     if (!skipScroll) scrollToLatestMessage();
@@ -1288,7 +1544,7 @@ function subscribeToMessages() {
         .on('postgres_changes', { 
             event: 'INSERT', 
             schema: 'public', 
-            table: 'messages',
+            table: 'messages', 
             filter: `room_id=eq.${chatState.roomId}`
         }, payload => {
             processIncomingMessage(payload.new);
@@ -1939,4 +2195,5 @@ if (modalAddRoomChar) {
     });
 }
 
+setupPageLifecycleReset();
 initChat();
