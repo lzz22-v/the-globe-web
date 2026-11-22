@@ -3,9 +3,20 @@ import { supabase } from '../config/supabase.js';
 const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ccc'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E";
 const MESSAGES_PAGE_SIZE = 10;
 const RTC_ICE_CONFIG = {
+    iceCandidatePoolSize: 10,
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        {
+            urls: [
+                'turn:openrelay.metered.ca:80',
+                'turn:openrelay.metered.ca:443',
+                'turn:openrelay.metered.ca:443?transport=tcp'
+            ],
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        }
     ]
 };
 
@@ -77,6 +88,7 @@ const chatState = {
     isPreloadingMedia: false,
     activeMedia: null,
     localMediaStream: null,
+    canvasCaptureCleanup: null,
     hostPeerConnections: new Map(), // peerId -> RTCPeerConnection
     viewerPeerConnection: null,
     pendingViewerIceCandidates: [],
@@ -860,7 +872,6 @@ async function addLocalMediaFiles(files) {
             });
 
             const objectUrl = await preloadFileIntoMemoryBlob(file, (pct) => {
-                // 0% a 90% = leitura completa do arquivo para RAM
                 const scaledPct = Math.round(pct * 0.9);
                 setMediaPreloadProgressUI({
                     visible: true,
@@ -973,32 +984,119 @@ function closeViewerPeerConnection() {
     chatState.pendingViewerIceCandidates = [];
 }
 
-function waitForVideoFrameReady(videoEl, timeoutMs = 5000) {
+function waitForRenderedVideoFrame(videoEl, timeoutMs = 4000) {
     if (!videoEl) return Promise.resolve();
-    if (videoEl.readyState >= 2 && videoEl.videoWidth > 0) {
-        return Promise.resolve();
-    }
     return new Promise(resolve => {
         let settled = false;
         const finish = () => {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
-            videoEl.removeEventListener('loadeddata', finish);
-            videoEl.removeEventListener('canplay', finish);
             resolve();
         };
         const timer = setTimeout(finish, timeoutMs);
-        videoEl.addEventListener('loadeddata', finish, { once: true });
-        videoEl.addEventListener('canplay', finish, { once: true });
+
+        if (typeof videoEl.requestVideoFrameCallback === 'function') {
+            videoEl.requestVideoFrameCallback(() => finish());
+            return;
+        }
+
+        const checkFrame = () => {
+            if (videoEl.readyState >= 2 && videoEl.videoWidth > 0 && videoEl.currentTime > 0) {
+                finish();
+            } else if (!settled) {
+                requestAnimationFrame(checkFrame);
+            }
+        };
+        requestAnimationFrame(checkFrame);
     });
 }
 
-function captureLocalVideoStream(videoEl) {
+function buildReliableLocalStream(videoEl) {
     if (!videoEl) return null;
-    if (typeof videoEl.captureStream === 'function') return videoEl.captureStream();
-    if (typeof videoEl.mozCaptureStream === 'function') return videoEl.mozCaptureStream();
-    return null;
+
+    if (typeof chatState.canvasCaptureCleanup === 'function') {
+        chatState.canvasCaptureCleanup();
+        chatState.canvasCaptureCleanup = null;
+    }
+
+    let rawStream = null;
+    if (typeof videoEl.captureStream === 'function') {
+        rawStream = videoEl.captureStream(30);
+    } else if (typeof videoEl.mozCaptureStream === 'function') {
+        rawStream = videoEl.mozCaptureStream(30);
+    }
+
+    const rawVideoTracks = rawStream ? rawStream.getVideoTracks() : [];
+    const rawAudioTracks = rawStream ? rawStream.getAudioTracks() : [];
+    const hasLiveUnmutedVideo = rawVideoTracks.some(
+        t => t.readyState === 'live' && !t.muted
+    );
+
+    if (rawStream && hasLiveUnmutedVideo) {
+        return rawStream;
+    }
+
+    // Fallback: se o captureStream() nativo estiver mudo/sem quadros no compositor,
+    // espelha os quadros decodificados na resolução nativa do vídeo + faixa de áudio original.
+    const width = videoEl.videoWidth || 1280;
+    const height = videoEl.videoHeight || 720;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { alpha: false });
+
+    let stopped = false;
+    const drawFrame = () => {
+        if (stopped) return;
+        if (videoEl.readyState >= 2 && !videoEl.paused && !videoEl.ended) {
+            if (canvas.width !== videoEl.videoWidth && videoEl.videoWidth > 0) {
+                canvas.width = videoEl.videoWidth;
+                canvas.height = videoEl.videoHeight;
+            }
+            ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+        }
+        if (typeof videoEl.requestVideoFrameCallback === 'function') {
+            videoEl.requestVideoFrameCallback(drawFrame);
+        } else {
+            requestAnimationFrame(drawFrame);
+        }
+    };
+    ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+    drawFrame();
+
+    const canvasStream = canvas.captureStream(30);
+    rawAudioTracks.forEach(track => canvasStream.addTrack(track));
+
+    chatState.canvasCaptureCleanup = () => {
+        stopped = true;
+        canvasStream.getTracks().forEach(t => t.stop());
+    };
+
+    return canvasStream;
+}
+
+function preferCompatibleVideoCodecs(pc) {
+    if (!pc || typeof pc.getTransceivers !== 'function') return;
+    const capabilities = RTCRtpReceiver.getCapabilities?.('video');
+    if (!capabilities?.codecs?.length) return;
+
+    const preferredOrder = ['video/VP8', 'video/H264', 'video/VP9'];
+    const sortedCodecs = [...capabilities.codecs].sort((a, b) => {
+        const idxA = preferredOrder.findIndex(m => m.toLowerCase() === a.mimeType.toLowerCase());
+        const idxB = preferredOrder.findIndex(m => m.toLowerCase() === b.mimeType.toLowerCase());
+        const rankA = idxA === -1 ? 99 : idxA;
+        const rankB = idxB === -1 ? 99 : idxB;
+        return rankA - rankB;
+    });
+
+    pc.getTransceivers().forEach(transceiver => {
+        if (transceiver.sender?.track?.kind === 'video' && typeof transceiver.setCodecPreferences === 'function') {
+            try {
+                transceiver.setCodecPreferences(sortedCodecs);
+            } catch (_) {}
+        }
+    });
 }
 
 async function createOfferForViewer(viewerId) {
@@ -1013,6 +1111,7 @@ async function createOfferForViewer(viewerId) {
     chatState.localMediaStream.getTracks().forEach(track => {
         pc.addTrack(track, chatState.localMediaStream);
     });
+    preferCompatibleVideoCodecs(pc);
 
     pc.onicecandidate = ({ candidate }) => {
         if (candidate) {
@@ -1024,7 +1123,7 @@ async function createOfferForViewer(viewerId) {
     };
 
     pc.onconnectionstatechange = () => {
-        if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+        if (['failed', 'closed'].includes(pc.connectionState)) {
             closeHostPeerConnection(viewerId);
         }
     };
@@ -1053,10 +1152,13 @@ async function handleViewerOffer(payload) {
 
     const pc = new RTCPeerConnection(RTC_ICE_CONFIG);
     chatState.viewerPeerConnection = pc;
+    const inboundStream = new MediaStream();
 
     pc.ontrack = (event) => {
-        const remoteStream = event.streams?.[0] || new MediaStream([event.track]);
-        if (!remoteStream) return;
+        if (event.track && !inboundStream.getTracks().some(t => t.id === event.track.id)) {
+            inboundStream.addTrack(event.track);
+        }
+        const remoteStream = event.streams?.[0] || inboundStream;
 
         mediaBroadcast.classList.remove('hidden');
         mediaBroadcastTitle.textContent = payload.title || 'Transmissão da sala';
@@ -1075,7 +1177,7 @@ async function handleViewerOffer(payload) {
         btnEnableMediaAudio?.classList.add('hidden');
         mediaAutoplayNotice?.classList.add('hidden');
 
-        const startRemotePlayback = () => {
+        const tryPlayRemote = () => {
             syncGlobePlayerControlsUI();
             revealGlobePlayerHud();
 
@@ -1087,11 +1189,10 @@ async function handleViewerOffer(payload) {
             });
         };
 
-        if (mediaBroadcastVideo.readyState >= 1) {
-            startRemotePlayback();
-        } else {
-            mediaBroadcastVideo.addEventListener('loadedmetadata', startRemotePlayback, { once: true });
-        }
+        tryPlayRemote();
+        event.track.onunmute = () => {
+            tryPlayRemote();
+        };
     };
 
     pc.onicecandidate = ({ candidate }) => {
@@ -1247,6 +1348,10 @@ async function startMediaBroadcast() {
 
     if (chatState.activeMedia) {
         closeAllHostPeerConnections();
+        if (typeof chatState.canvasCaptureCleanup === 'function') {
+            chatState.canvasCaptureCleanup();
+            chatState.canvasCaptureCleanup = null;
+        }
         if (chatState.localMediaStream) {
             chatState.localMediaStream.getTracks().forEach(track => track.stop());
             chatState.localMediaStream = null;
@@ -1268,7 +1373,7 @@ async function startMediaBroadcast() {
 
     try {
         await mediaBroadcastVideo.play();
-        await waitForVideoFrameReady(mediaBroadcastVideo);
+        await waitForRenderedVideoFrame(mediaBroadcastVideo);
     } catch (error) {
         console.error('Não foi possível reproduzir o vídeo local:', error);
         alert('Seu navegador não conseguiu reproduzir este formato de vídeo.');
@@ -1279,7 +1384,7 @@ async function startMediaBroadcast() {
     syncGlobePlayerControlsUI();
     revealGlobePlayerHud();
 
-    const stream = captureLocalVideoStream(mediaBroadcastVideo);
+    const stream = buildReliableLocalStream(mediaBroadcastVideo);
     if (!stream) {
         alert('Este navegador não suporta captura direta de stream de vídeo.');
         await closeMediaBroadcast(false);
@@ -1309,6 +1414,11 @@ async function closeMediaBroadcast(notify = false) {
     chatState.activeMedia = null;
     closeAllHostPeerConnections();
     closeViewerPeerConnection();
+
+    if (typeof chatState.canvasCaptureCleanup === 'function') {
+        chatState.canvasCaptureCleanup();
+        chatState.canvasCaptureCleanup = null;
+    }
 
     if (chatState.localMediaStream) {
         chatState.localMediaStream.getTracks().forEach(track => track.stop());
