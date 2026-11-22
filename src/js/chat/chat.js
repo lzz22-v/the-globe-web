@@ -73,7 +73,8 @@ const chatState = {
     mediaChannel: null,
     mediaRealtimeConnected: false,
     mediaRealtimeError: false,
-    mediaAssets: [], // Vídeos mantidos exclusivamente em memória local (Blob URL)
+    mediaAssets: [], // Vídeos pré-carregados completamente em memória local (Blob URL)
+    isPreloadingMedia: false,
     activeMedia: null,
     localMediaStream: null,
     hostPeerConnections: new Map(), // peerId -> RTCPeerConnection
@@ -197,6 +198,9 @@ const mediaControlsToggle = document.getElementById('media-controls-toggle');
 const chatHeader = document.querySelector('.chat-header');
 const mediaFileInput = document.getElementById('media-file-input');
 const btnAddMedia = document.getElementById('btn-add-media');
+const mediaPreloadProgress = document.getElementById('media-preload-progress');
+const mediaPreloadFill = document.getElementById('media-preload-fill');
+const mediaPreloadLabel = document.getElementById('media-preload-label');
 const mediaLibrary = document.getElementById('media-library');
 const btnBroadcastMedia = document.getElementById('btn-broadcast-media');
 const btnDeleteMedia = document.getElementById('btn-delete-media');
@@ -715,24 +719,46 @@ function setupGlobePlayerInteractions() {
     });
 }
 
+function setMediaPreloadProgressUI({ visible, percent = 0, label = '' }) {
+    if (!mediaPreloadProgress) return;
+    mediaPreloadProgress.classList.toggle('hidden', !visible);
+    const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+    mediaPreloadProgress.setAttribute('aria-valuenow', String(clamped));
+    if (mediaPreloadFill) {
+        mediaPreloadFill.style.width = `${clamped}%`;
+    }
+    if (mediaPreloadLabel && label) {
+        mediaPreloadLabel.textContent = label;
+    }
+}
+
 function renderLocalMediaLibrary() {
     if (!chatState.isHost || !mediaLibrary) return;
     const previous = mediaLibrary.value;
     mediaLibrary.replaceChildren(
         new Option(chatState.mediaAssets.length ? 'Selecione um vídeo' : 'Nenhum vídeo adicionado', '')
     );
-    chatState.mediaAssets.forEach(asset => mediaLibrary.add(new Option(asset.name, asset.id)));
+    chatState.mediaAssets.forEach(asset => {
+        const label = asset.ready ? asset.name : `${asset.name} (carregando...)`;
+        mediaLibrary.add(new Option(label, asset.id));
+    });
     mediaLibrary.value = chatState.mediaAssets.some(asset => asset.id === previous)
         ? previous
         : (chatState.mediaAssets[0]?.id || '');
-    mediaLibrary.disabled = !chatState.mediaAssets.length;
+    mediaLibrary.disabled = !chatState.mediaAssets.length || chatState.isPreloadingMedia;
     updateMediaButtons();
 }
 
 function updateMediaButtons() {
-    const selected = chatState.mediaAssets.some(asset => asset.id === mediaLibrary?.value);
-    if (btnBroadcastMedia) btnBroadcastMedia.disabled = !chatState.isHost || !selected || !chatState.mediaRealtimeConnected;
-    if (btnDeleteMedia) btnDeleteMedia.disabled = !chatState.isHost || !selected;
+    const selectedAsset = chatState.mediaAssets.find(asset => asset.id === mediaLibrary?.value);
+    const isReady = Boolean(selectedAsset && selectedAsset.ready);
+    if (btnAddMedia) btnAddMedia.disabled = !chatState.isHost || chatState.isPreloadingMedia;
+    if (btnBroadcastMedia) {
+        btnBroadcastMedia.disabled = !chatState.isHost || !isReady || chatState.isPreloadingMedia || !chatState.mediaRealtimeConnected;
+    }
+    if (btnDeleteMedia) {
+        btnDeleteMedia.disabled = !chatState.isHost || !selectedAsset || chatState.isPreloadingMedia;
+    }
     if (mediaChannelStatus) {
         mediaChannelStatus.textContent = chatState.mediaRealtimeError
             ? 'Canal de sinalização indisponível'
@@ -742,27 +768,155 @@ function updateMediaButtons() {
     }
 }
 
-function addLocalMediaFiles(files) {
-    if (!chatState.isHost || !files?.length) return;
+function preloadFileIntoMemoryBlob(file, onProgress) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+
+        reader.onprogress = (event) => {
+            if (event.lengthComputable && typeof onProgress === 'function') {
+                onProgress((event.loaded / event.total) * 100);
+            }
+        };
+
+        reader.onload = () => {
+            try {
+                const buffer = reader.result;
+                const memoryBlob = new Blob([buffer], { type: file.type || 'video/mp4' });
+                const blobUrl = URL.createObjectURL(memoryBlob);
+                resolve(blobUrl);
+            } catch (err) {
+                reject(err);
+            }
+        };
+
+        reader.onerror = () => {
+            reject(reader.error || new Error('Falha ao carregar o arquivo de vídeo em memória.'));
+        };
+
+        reader.readAsArrayBuffer(file);
+    });
+}
+
+function warmupVideoMetadataAndFirstFrame(blobUrl) {
+    return new Promise((resolve, reject) => {
+        const probeVideo = document.createElement('video');
+        probeVideo.preload = 'auto';
+        probeVideo.muted = true;
+        probeVideo.playsInline = true;
+        probeVideo.src = blobUrl;
+
+        let settled = false;
+        const cleanup = () => {
+            probeVideo.removeEventListener('loadeddata', onReady);
+            probeVideo.removeEventListener('canplaythrough', onReady);
+            probeVideo.removeEventListener('error', onError);
+            probeVideo.pause();
+            probeVideo.removeAttribute('src');
+            probeVideo.load();
+        };
+
+        const onReady = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve();
+        };
+
+        const onError = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(new Error('O navegador não conseguiu decodificar este vídeo.'));
+        };
+
+        probeVideo.addEventListener('loadeddata', onReady, { once: true });
+        probeVideo.addEventListener('canplaythrough', onReady, { once: true });
+        probeVideo.addEventListener('error', onError, { once: true });
+        probeVideo.load();
+    });
+}
+
+async function addLocalMediaFiles(files) {
+    if (!chatState.isHost || !files?.length || chatState.isPreloadingMedia) return;
+
+    const videoFiles = Array.from(files).filter(file => file.type.startsWith('video/'));
+    if (!videoFiles.length) return;
+
+    chatState.isPreloadingMedia = true;
+    renderLocalMediaLibrary();
+    updateMediaButtons();
+
     let addedLastId = null;
 
-    for (const file of files) {
-        if (!file.type.startsWith('video/')) continue;
-        const id = crypto.randomUUID();
-        const objectUrl = URL.createObjectURL(file);
-        chatState.mediaAssets.push({
-            id,
-            name: file.name,
-            file,
-            url: objectUrl
-        });
-        addedLastId = id;
-    }
+    try {
+        for (let i = 0; i < videoFiles.length; i += 1) {
+            const file = videoFiles[i];
+            const prefix = videoFiles.length > 1 ? `(${i + 1}/${videoFiles.length}) ` : '';
 
-    renderLocalMediaLibrary();
-    if (addedLastId && mediaLibrary) {
-        mediaLibrary.value = addedLastId;
+            setMediaPreloadProgressUI({
+                visible: true,
+                percent: 0,
+                label: `${prefix}Carregando vídeo... 0%`
+            });
+
+            const objectUrl = await preloadFileIntoMemoryBlob(file, (pct) => {
+                // 0% a 90% = leitura completa do arquivo para RAM
+                const scaledPct = Math.round(pct * 0.9);
+                setMediaPreloadProgressUI({
+                    visible: true,
+                    percent: scaledPct,
+                    label: `${prefix}Carregando vídeo... ${scaledPct}%`
+                });
+            });
+
+            setMediaPreloadProgressUI({
+                visible: true,
+                percent: 95,
+                label: `${prefix}Preparando vídeo... 95%`
+            });
+
+            try {
+                await warmupVideoMetadataAndFirstFrame(objectUrl);
+            } catch (decodeError) {
+                URL.revokeObjectURL(objectUrl);
+                throw decodeError;
+            }
+
+            const id = crypto.randomUUID();
+            chatState.mediaAssets.push({
+                id,
+                name: file.name,
+                file,
+                url: objectUrl,
+                ready: true
+            });
+            addedLastId = id;
+
+            setMediaPreloadProgressUI({
+                visible: true,
+                percent: 100,
+                label: `${prefix}Vídeo pronto (100%)`
+            });
+        }
+    } catch (error) {
+        console.error('Erro ao pré-carregar vídeo:', error);
+        alert(error?.message || 'Não foi possível carregar este vídeo.');
+        setMediaPreloadProgressUI({ visible: false });
+    } finally {
+        chatState.isPreloadingMedia = false;
+        renderLocalMediaLibrary();
+        if (addedLastId && mediaLibrary) {
+            mediaLibrary.value = addedLastId;
+        }
         updateMediaButtons();
+
+        if (addedLastId) {
+            setTimeout(() => {
+                if (!chatState.isPreloadingMedia) {
+                    setMediaPreloadProgressUI({ visible: false });
+                }
+            }, 1800);
+        }
     }
 }
 
@@ -771,6 +925,8 @@ function clearLocalMediaAssets() {
         if (asset.url) URL.revokeObjectURL(asset.url);
     });
     chatState.mediaAssets = [];
+    chatState.isPreloadingMedia = false;
+    setMediaPreloadProgressUI({ visible: false });
     if (mediaLibrary) {
         mediaLibrary.replaceChildren(new Option('Nenhum vídeo adicionado', ''));
         mediaLibrary.value = '';
@@ -815,6 +971,27 @@ function closeViewerPeerConnection() {
         chatState.viewerPeerConnection = null;
     }
     chatState.pendingViewerIceCandidates = [];
+}
+
+function waitForVideoFrameReady(videoEl, timeoutMs = 5000) {
+    if (!videoEl) return Promise.resolve();
+    if (videoEl.readyState >= 2 && videoEl.videoWidth > 0) {
+        return Promise.resolve();
+    }
+    return new Promise(resolve => {
+        let settled = false;
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            videoEl.removeEventListener('loadeddata', finish);
+            videoEl.removeEventListener('canplay', finish);
+            resolve();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        videoEl.addEventListener('loadeddata', finish, { once: true });
+        videoEl.addEventListener('canplay', finish, { once: true });
+    });
 }
 
 function captureLocalVideoStream(videoEl) {
@@ -878,13 +1055,16 @@ async function handleViewerOffer(payload) {
     chatState.viewerPeerConnection = pc;
 
     pc.ontrack = (event) => {
-        const [remoteStream] = event.streams;
+        const remoteStream = event.streams?.[0] || new MediaStream([event.track]);
         if (!remoteStream) return;
 
         mediaBroadcast.classList.remove('hidden');
         mediaBroadcastTitle.textContent = payload.title || 'Transmissão da sala';
         btnStopMedia?.classList.add('hidden');
         mediaBroadcastVideo.controls = false;
+        mediaBroadcastVideo.playsInline = true;
+        mediaBroadcastVideo.setAttribute('playsinline', '');
+        mediaBroadcastVideo.setAttribute('webkit-playsinline', '');
 
         if (mediaBroadcastVideo.srcObject !== remoteStream) {
             mediaBroadcastVideo.srcObject = remoteStream;
@@ -895,15 +1075,23 @@ async function handleViewerOffer(payload) {
         btnEnableMediaAudio?.classList.add('hidden');
         mediaAutoplayNotice?.classList.add('hidden');
 
-        syncGlobePlayerControlsUI();
-        revealGlobePlayerHud();
-
-        mediaBroadcastVideo.play().then(() => {
+        const startRemotePlayback = () => {
             syncGlobePlayerControlsUI();
             revealGlobePlayerHud();
-        }).catch(() => {
-            showAutoplayFallback();
-        });
+
+            mediaBroadcastVideo.play().then(() => {
+                syncGlobePlayerControlsUI();
+                revealGlobePlayerHud();
+            }).catch(() => {
+                showAutoplayFallback();
+            });
+        };
+
+        if (mediaBroadcastVideo.readyState >= 1) {
+            startRemotePlayback();
+        } else {
+            mediaBroadcastVideo.addEventListener('loadedmetadata', startRemotePlayback, { once: true });
+        }
     };
 
     pc.onicecandidate = ({ candidate }) => {
@@ -1048,14 +1236,14 @@ function showAutoplayFallback() {
 }
 
 async function startMediaBroadcast() {
-    if (!chatState.isHost) return;
+    if (!chatState.isHost || chatState.isPreloadingMedia) return;
     if (!chatState.mediaRealtimeConnected) {
         alert('Aguarde a conexão do canal da sala para iniciar a transmissão.');
         return;
     }
 
     const asset = chatState.mediaAssets.find(item => item.id === mediaLibrary?.value);
-    if (!asset) return;
+    if (!asset || !asset.ready) return;
 
     if (chatState.activeMedia) {
         closeAllHostPeerConnections();
@@ -1070,6 +1258,8 @@ async function startMediaBroadcast() {
     mediaBroadcastVideo.src = asset.url;
     mediaBroadcastVideo.controls = false;
     mediaBroadcastVideo.muted = false;
+    mediaBroadcastVideo.playsInline = true;
+    mediaBroadcastVideo.setAttribute('playsinline', '');
     mediaBroadcastTitle.textContent = asset.name;
     mediaBroadcast.classList.remove('hidden');
     btnStopMedia?.classList.remove('hidden');
@@ -1078,6 +1268,7 @@ async function startMediaBroadcast() {
 
     try {
         await mediaBroadcastVideo.play();
+        await waitForVideoFrameReady(mediaBroadcastVideo);
     } catch (error) {
         console.error('Não foi possível reproduzir o vídeo local:', error);
         alert('Seu navegador não conseguiu reproduzir este formato de vídeo.');
@@ -1142,10 +1333,11 @@ async function closeMediaBroadcast(notify = false) {
 
 setupGlobePlayerInteractions();
 
-if (btnAddMedia) btnAddMedia.addEventListener('click', () => chatState.isHost && mediaFileInput?.click());
-if (mediaFileInput) mediaFileInput.addEventListener('change', () => {
-    addLocalMediaFiles(mediaFileInput.files);
+if (btnAddMedia) btnAddMedia.addEventListener('click', () => chatState.isHost && !chatState.isPreloadingMedia && mediaFileInput?.click());
+if (mediaFileInput) mediaFileInput.addEventListener('change', async () => {
+    const selectedFiles = mediaFileInput.files ? Array.from(mediaFileInput.files) : [];
     mediaFileInput.value = '';
+    await addLocalMediaFiles(selectedFiles);
 });
 if (mediaLibrary) mediaLibrary.addEventListener('change', updateMediaButtons);
 if (mediaControlsToggle) mediaControlsToggle.addEventListener('click', () => {
@@ -1159,7 +1351,7 @@ if (mediaControlsToggle) mediaControlsToggle.addEventListener('click', () => {
 });
 if (btnBroadcastMedia) btnBroadcastMedia.addEventListener('click', startMediaBroadcast);
 if (btnDeleteMedia) btnDeleteMedia.addEventListener('click', async () => {
-    if (!chatState.isHost) return;
+    if (!chatState.isHost || chatState.isPreloadingMedia) return;
     const index = chatState.mediaAssets.findIndex(item => item.id === mediaLibrary.value);
     if (index === -1) return;
     const [removed] = chatState.mediaAssets.splice(index, 1);
