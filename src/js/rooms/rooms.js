@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase.js';
+import { openImageCropper } from '../utils/image-cropper.js';
 
 // ==========================================
 // 1. MAPEAMENTO DE ELEMENTOS
@@ -49,10 +50,15 @@ const notificationsPanel = document.getElementById('notifications-panel');
 const notificationsList = document.getElementById('notifications-list');
 
 const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ccc'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E";
+const APP_NOTIFICATION_LOGO = new URL('../theGlobe-logo-colorida.png', import.meta.url).href;
 
 // Estado global para guardar o usuário atual, sala em edição e pedidos
 let currentUser = null;
 let currentEditingRoom = null;
+let croppedNewCoverFile = null;
+let croppedNewWallpaperFile = null;
+let croppedEditCoverFile = null;
+let croppedEditWallpaperFile = null;
 let requestSubscription = null;
 let unreadMessagesSubscription = null;
 let roomBroadcastChannels = [];
@@ -62,6 +68,152 @@ let ownedRoomTitles = new Map();
 let cachedRooms = [];
 const pendingJoinRequests = new Map();
 const countedUnreadMessageIds = new Set();
+
+// ==========================================
+// 1.0. SINAL SONORO ELEGANTE E NOTIFICAÇÃO EM SEGUNDO PLANO
+// ==========================================
+let notificationAudioCtx = null;
+let lastNotificationSoundAt = 0;
+let notificationPermissionRequested = false;
+
+function getNotificationAudioContext() {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!notificationAudioCtx) {
+        notificationAudioCtx = new AudioCtx();
+    }
+    return notificationAudioCtx;
+}
+
+function requestBrowserNotificationPermission() {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'default' && !notificationPermissionRequested) {
+        notificationPermissionRequested = true;
+        Notification.requestPermission().catch(() => {});
+    }
+}
+
+function handleFirstUserInteraction() {
+    const ctx = getNotificationAudioContext();
+    if (ctx && ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+    }
+    requestBrowserNotificationPermission();
+}
+
+['pointerdown', 'keydown', 'touchstart'].forEach(eventName => {
+    window.addEventListener(eventName, handleFirstUserInteraction, { passive: true });
+});
+
+function isPageInBackground() {
+    return document.hidden || document.visibilityState !== 'visible' || !document.hasFocus();
+}
+
+function showBackgroundBrowserNotification({ room, rawMessage, unreadDelta = 1 }) {
+    if (!('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    if (!isPageInBackground()) return;
+
+    const roomTitle = room?.title || 'theGlobe';
+    const senderName =
+        rawMessage?.sender_name ||
+        rawMessage?.user_name ||
+        rawMessage?.author_name ||
+        rawMessage?.username ||
+        '';
+    const rawContent = typeof rawMessage?.content === 'string' ? rawMessage.content.trim() : '';
+
+    let bodyText = '';
+    if (rawContent) {
+        const preview = rawContent.length > 110 ? `${rawContent.slice(0, 107)}...` : rawContent;
+        bodyText = senderName ? `${senderName}: ${preview}` : preview;
+    } else if (senderName) {
+        bodyText = `${senderName} enviou uma nova mensagem.`;
+    } else {
+        bodyText = unreadDelta > 1
+            ? `Você tem ${unreadDelta} novas mensagens nesta sala.`
+            : 'Você recebeu uma nova mensagem nesta sala.';
+    }
+
+    try {
+        const notification = new Notification(roomTitle, {
+            body: bodyText,
+            icon: APP_NOTIFICATION_LOGO,
+            badge: APP_NOTIFICATION_LOGO,
+            tag: room?.id ? `theglobe-room-${room.id}` : 'theglobe-new-message',
+            renotify: true,
+            silent: true // O áudio já é reproduzido pelo nosso sintetizador Web Audio
+        });
+
+        notification.onclick = () => {
+            try {
+                window.focus();
+            } catch {}
+            notification.close();
+
+            if (room?.id) {
+                const roomKey = String(room.id);
+                const previousReadTs = Number(getRoomLastReadMap()[roomKey] || 0);
+                if (Number(room.unread_count || 0) > 0 && previousReadTs > 0) {
+                    sessionStorage.setItem(`chatUnreadSince_${roomKey}`, String(previousReadTs));
+                }
+                const now = Date.now();
+                markRoomAsUsed(room.id, now);
+                markRoomAsRead(room.id, now);
+                window.location.href = `chat.html?id=${room.id}`;
+            }
+        };
+    } catch (error) {
+        console.warn('Não foi possível exibir a notificação do navegador:', error);
+    }
+}
+
+async function playNewMessageChime() {
+    const nowMs = Date.now();
+    if (nowMs - lastNotificationSoundAt < 450) return;
+
+    const ctx = getNotificationAudioContext();
+    if (!ctx) return;
+
+    if (ctx.state === 'suspended') {
+        try {
+            await ctx.resume();
+        } catch {
+            return;
+        }
+    }
+
+    lastNotificationSoundAt = nowMs;
+    const start = ctx.currentTime + 0.015;
+
+    // Arpejo harmônico cristalino (A5 -> C#6 -> E6) com brilho suave e cauda ressonante
+    const notes = [
+        { freq: 880.0, offset: 0.00, duration: 0.65, peak: 0.075, type: 'sine' },
+        { freq: 1108.73, offset: 0.075, duration: 0.72, peak: 0.065, type: 'sine' },
+        { freq: 1318.51, offset: 0.15, duration: 0.95, peak: 0.08, type: 'sine' },
+        { freq: 2637.02, offset: 0.15, duration: 0.55, peak: 0.018, type: 'triangle' }
+    ];
+
+    notes.forEach(({ freq, offset, duration, peak, type }) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const t0 = start + offset;
+        const tEnd = t0 + duration;
+
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, t0);
+
+        gain.gain.setValueAtTime(0.0001, t0);
+        gain.gain.exponentialRampToValueAtTime(peak, t0 + 0.018);
+        gain.gain.exponentialRampToValueAtTime(0.0001, tEnd);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start(t0);
+        osc.stop(tEnd + 0.02);
+    });
+}
 
 // ==========================================
 // 1.1. CONTROLE DE ÚLTIMO USO E MENSAGENS NÃO LIDAS
@@ -157,6 +309,8 @@ function handleIncomingUnreadMessage(rawMessage) {
 
     cachedRooms = sortRoomsByLastUsed(cachedRooms);
     renderRooms(cachedRooms);
+    playNewMessageChime();
+    showBackgroundBrowserNotification({ room, rawMessage, unreadDelta: 1 });
 }
 
 // ==========================================
@@ -171,6 +325,8 @@ btnNewRoom.addEventListener('click', () => {
 function closeNewRoomModal() {
     modalNewRoom.classList.add('hidden');
     formNewRoom.reset();
+    croppedNewCoverFile = null;
+    croppedNewWallpaperFile = null;
     dropzoneCover.querySelector('.upload-title').textContent = 'Clique ou arraste';
     dropzoneWallpaper.querySelector('.upload-title').textContent = 'Clique ou arraste';
 }
@@ -181,15 +337,37 @@ btnCancelNewRoom.addEventListener('click', closeNewRoomModal);
 dropzoneCover.addEventListener('click', () => inputCover.click());
 dropzoneWallpaper.addEventListener('click', () => inputWallpaper.click());
 
-inputCover.addEventListener('change', (e) => {
-    if (e.target.files.length > 0) {
-        dropzoneCover.querySelector('.upload-title').textContent = e.target.files[0].name;
+inputCover.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const cropped = await openImageCropper(file, {
+        title: 'Cortar capa da sala',
+        aspectRatio: 16 / 9,
+        outputWidth: 800,
+        outputHeight: 450
+    });
+    if (cropped) {
+        croppedNewCoverFile = cropped.file;
+        dropzoneCover.querySelector('.upload-title').textContent = cropped.file.name;
+    } else if (!croppedNewCoverFile) {
+        inputCover.value = '';
     }
 });
 
-inputWallpaper.addEventListener('change', (e) => {
-    if (e.target.files.length > 0) {
-        dropzoneWallpaper.querySelector('.upload-title').textContent = e.target.files[0].name;
+inputWallpaper.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const cropped = await openImageCropper(file, {
+        title: 'Cortar wallpaper da sala',
+        aspectRatio: 16 / 9,
+        outputWidth: 1280,
+        outputHeight: 720
+    });
+    if (cropped) {
+        croppedNewWallpaperFile = cropped.file;
+        dropzoneWallpaper.querySelector('.upload-title').textContent = cropped.file.name;
+    } else if (!croppedNewWallpaperFile) {
+        inputWallpaper.value = '';
     }
 });
 
@@ -197,6 +375,8 @@ inputWallpaper.addEventListener('change', (e) => {
 // --- EDITAR SALA ---
 function openEditModal(room) {
     currentEditingRoom = room;
+    croppedEditCoverFile = null;
+    croppedEditWallpaperFile = null;
     editRoomId.value = room.id;
     editRoomNameInput.value = room.title;
     
@@ -219,6 +399,8 @@ function openEditModal(room) {
 function closeEditModal() {
     modalEditRoom.classList.add('hidden');
     formEditRoom.reset();
+    croppedEditCoverFile = null;
+    croppedEditWallpaperFile = null;
     currentEditingRoom = null;
 }
 
@@ -228,15 +410,37 @@ btnCancelEditRoom.addEventListener('click', closeEditModal);
 editDropzoneCover.addEventListener('click', () => editInputCover.click());
 editDropzoneWallpaper.addEventListener('click', () => editInputWallpaper.click());
 
-editInputCover.addEventListener('change', (e) => {
-    if (e.target.files.length > 0) {
-        editDropzoneCover.querySelector('.upload-title').textContent = e.target.files[0].name;
+editInputCover.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const cropped = await openImageCropper(file, {
+        title: 'Cortar nova capa da sala',
+        aspectRatio: 16 / 9,
+        outputWidth: 800,
+        outputHeight: 450
+    });
+    if (cropped) {
+        croppedEditCoverFile = cropped.file;
+        editDropzoneCover.querySelector('.upload-title').textContent = cropped.file.name;
+    } else if (!croppedEditCoverFile) {
+        editInputCover.value = '';
     }
 });
 
-editInputWallpaper.addEventListener('change', (e) => {
-    if (e.target.files.length > 0) {
-        editDropzoneWallpaper.querySelector('.upload-title').textContent = e.target.files[0].name;
+editInputWallpaper.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const cropped = await openImageCropper(file, {
+        title: 'Cortar novo wallpaper da sala',
+        aspectRatio: 16 / 9,
+        outputWidth: 1280,
+        outputHeight: 720
+    });
+    if (cropped) {
+        croppedEditWallpaperFile = cropped.file;
+        editDropzoneWallpaper.querySelector('.upload-title').textContent = cropped.file.name;
+    } else if (!croppedEditWallpaperFile) {
+        editInputWallpaper.value = '';
     }
 });
 
@@ -350,11 +554,12 @@ async function initRooms() {
     fetchRooms();
 }
 
-async function hydrateLastActivityAndUnread(rooms) {
+async function hydrateLastActivityAndUnread(rooms, { notifyOnIncrease = false } = {}) {
     if (!rooms.length) return false;
     const usageMap = getRoomLastUsedMap();
     const readMap = getRoomLastReadMap();
     let hasChanges = false;
+    const increasedRooms = [];
 
     await Promise.all(rooms.map(async room => {
         const roomKey = String(room.id);
@@ -405,10 +610,20 @@ async function hydrateLastActivityAndUnread(rooms) {
 
         const nextUnread = unreadError ? previousUnread : rows.length;
         if (nextUnread !== previousUnread) {
+            if (nextUnread > previousUnread) {
+                increasedRooms.push({ room, delta: nextUnread - previousUnread });
+            }
             room.unread_count = nextUnread;
             hasChanges = true;
         }
     }));
+
+    if (notifyOnIncrease && increasedRooms.length > 0) {
+        playNewMessageChime();
+        increasedRooms.forEach(({ room, delta }) => {
+            showBackgroundBrowserNotification({ room, unreadDelta: delta });
+        });
+    }
 
     return hasChanges;
 }
@@ -455,13 +670,13 @@ function setupUnreadMessagesListener(roomIds) {
         roomBroadcastChannels.push(channel);
     });
 
-    // 3. Sincronização automática periódica de segurança (sem precisar recarregar a página)
+    // 3. Sincronização automática periódica de segurança (inclusive em segundo plano)
     if (unreadPollTimer) clearInterval(unreadPollTimer);
     unreadPollTimer = setInterval(async () => {
-        if (document.visibilityState !== 'visible' || isSyncingUnread || !cachedRooms.length) return;
+        if (isSyncingUnread || !cachedRooms.length) return;
         isSyncingUnread = true;
         try {
-            const changed = await hydrateLastActivityAndUnread(cachedRooms);
+            const changed = await hydrateLastActivityAndUnread(cachedRooms, { notifyOnIncrease: true });
             if (changed) {
                 cachedRooms = sortRoomsByLastUsed(cachedRooms);
                 renderRooms(cachedRooms);
@@ -758,13 +973,13 @@ formNewRoom.addEventListener('submit', async (e) => {
 
         let coverUrl = 'https://placehold.co/800x450/1a1c23/9d4edd?text=Sem+Capa'; 
         
-        if (inputCover.files.length > 0) {
-            const file = inputCover.files[0];
-            const fileExt = file.name.split('.').pop();
+        const coverFile = croppedNewCoverFile || inputCover.files[0];
+        if (coverFile) {
+            const fileExt = coverFile.name.split('.').pop();
             const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
             const filePath = `covers/${fileName}`;
 
-            const { error: uploadError } = await supabase.storage.from('rooms').upload(filePath, file);
+            const { error: uploadError } = await supabase.storage.from('rooms').upload(filePath, coverFile);
             if (uploadError) throw new Error("Falha ao enviar a imagem de capa.");
             
             const { data: publicUrlData } = supabase.storage.from('rooms').getPublicUrl(filePath);
@@ -773,13 +988,13 @@ formNewRoom.addEventListener('submit', async (e) => {
 
         let wallpaperUrl = null;
         
-        if (inputWallpaper.files.length > 0) {
-            const fileWall = inputWallpaper.files[0];
-            const fileExtWall = fileWall.name.split('.').pop();
+        const wallpaperFile = croppedNewWallpaperFile || inputWallpaper.files[0];
+        if (wallpaperFile) {
+            const fileExtWall = wallpaperFile.name.split('.').pop();
             const fileNameWall = `wallpaper-${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExtWall}`;
             const filePathWall = `wallpapers/${fileNameWall}`;
 
-            const { error: uploadErrorWall } = await supabase.storage.from('rooms').upload(filePathWall, fileWall);
+            const { error: uploadErrorWall } = await supabase.storage.from('rooms').upload(filePathWall, wallpaperFile);
             if (uploadErrorWall) throw new Error("Falha ao enviar a imagem de wallpaper.");
             
             const { data: publicUrlDataWall } = supabase.storage.from('rooms').getPublicUrl(filePathWall);
@@ -831,26 +1046,26 @@ formEditRoom.addEventListener('submit', async (e) => {
         let finalCoverUrl = currentEditingRoom.image_url;
         let finalWallpaperUrl = currentEditingRoom.wallpaper_url;
 
-        if (editInputCover.files.length > 0) {
-            const file = editInputCover.files[0];
-            const fileExt = file.name.split('.').pop();
+        const editCoverFile = croppedEditCoverFile || editInputCover.files[0];
+        if (editCoverFile) {
+            const fileExt = editCoverFile.name.split('.').pop();
             const fileName = `edit-cover-${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
             const filePath = `covers/${fileName}`;
 
-            const { error: uploadError } = await supabase.storage.from('rooms').upload(filePath, file);
+            const { error: uploadError } = await supabase.storage.from('rooms').upload(filePath, editCoverFile);
             if (uploadError) throw new Error("Falha ao enviar a nova imagem de capa.");
             
             const { data: publicUrlData } = supabase.storage.from('rooms').getPublicUrl(filePath);
             finalCoverUrl = publicUrlData.publicUrl;
         }
 
-        if (editInputWallpaper.files.length > 0) {
-            const fileWall = editInputWallpaper.files[0];
-            const fileExtWall = fileWall.name.split('.').pop();
+        const editWallpaperFile = croppedEditWallpaperFile || editInputWallpaper.files[0];
+        if (editWallpaperFile) {
+            const fileExtWall = editWallpaperFile.name.split('.').pop();
             const fileNameWall = `edit-wallpaper-${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExtWall}`;
             const filePathWall = `wallpapers/${fileNameWall}`;
 
-            const { error: uploadErrorWall } = await supabase.storage.from('rooms').upload(filePathWall, fileWall);
+            const { error: uploadErrorWall } = await supabase.storage.from('rooms').upload(filePathWall, editWallpaperFile);
             if (uploadErrorWall) throw new Error("Falha ao enviar o novo wallpaper.");
             
             const { data: publicUrlDataWall } = supabase.storage.from('rooms').getPublicUrl(filePathWall);

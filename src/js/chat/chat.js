@@ -2,6 +2,12 @@ import { supabase } from '../config/supabase.js';
 
 const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ccc'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E";
 const MESSAGES_PAGE_SIZE = 10;
+const RTC_ICE_CONFIG = {
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+};
 
 // ==========================================
 // 1. ÍCONES VETORIAIS (SVG)
@@ -59,15 +65,18 @@ const chatState = {
     mediaChannel: null,
     mediaRealtimeConnected: false,
     mediaRealtimeError: false,
-    mediaAssets: [],
+    mediaAssets: [], // Vídeos mantidos exclusivamente em memória local (Blob URL)
     activeMedia: null,
-    mediaSyncTimer: null,
-    mediaSequence: 0,
-    lastMediaSequence: -1,
-    remoteMediaState: null,
+    localMediaStream: null,
+    hostPeerConnections: new Map(), // peerId -> RTCPeerConnection
+    viewerPeerConnection: null,
+    pendingViewerIceCandidates: [],
+    pendingHostIceCandidates: new Map(), // peerId -> RTCIceCandidateInit[]
     mediaMutedForAutoplay: false,
     roomUsers: new Map(),
-    onlineUsers: new Map() // Rastreador de usuários conectados na sala
+    onlineUsers: new Map(), // Rastreador de usuários conectados na sala
+    loadedAvatarUrls: new Set(), // Cache de URLs de avatares já carregados na sessão
+    unlockedCharacterPages: new Set([0]) // Páginas de 10 personagens já liberadas para carregar fotos
 };
 
 let userWalletCharacters = [];
@@ -83,7 +92,6 @@ function captureInitialUnreadBaseline() {
     if (!chatState.roomId || !chatState.currentUser.id) return;
     const roomKey = String(chatState.roomId);
 
-    // Captura o timestamp anterior salvo ao clicar no card em rooms.html (e consome uma única vez)
     const sessionKey = `chatUnreadSince_${roomKey}`;
     const fromSession = Number(sessionStorage.getItem(sessionKey) || 0);
     if (fromSession > 0) {
@@ -92,7 +100,6 @@ function captureInitialUnreadBaseline() {
         return;
     }
 
-    // Fallback caso o usuário tenha aberto diretamente pela URL sem passar por rooms.html
     try {
         const readKey = `roomLastRead_${chatState.currentUser.id}`;
         const readMap = JSON.parse(localStorage.getItem(readKey) || '{}');
@@ -159,7 +166,8 @@ const chatMessagesContainer = document.getElementById('chat-messages') || docume
 let characterProfileModal = null;
 let activeCharacterPage = 0;
 let characterSwipeStartX = null;
-const MOBILE_CHARACTER_PAGE_SIZE = 10;
+const CHARACTER_AVATAR_BATCH_SIZE = 10;
+const MOBILE_CHARACTER_PAGE_SIZE = CHARACTER_AVATAR_BATCH_SIZE;
 
 const toggleEncenacao = document.getElementById('toggle-encenacao');
 const characterBar = document.getElementById('character-bar');
@@ -268,7 +276,6 @@ async function initChat() {
         subscribeToMessages();
         setupMessageHistoryScroll();
 
-        // Carrega perfis, personagens da sala, carteira e as 10 mensagens mais recentes em paralelo
         await Promise.all([
             loadRoomUserProfiles(),
             fetchRoomCharacters(),
@@ -282,10 +289,7 @@ async function initChat() {
             }
         });
 
-        const firstMyChar = chatState.roomCharacters.find(c => c.ownerId === chatState.currentUser.id);
-        if (firstMyChar) {
-            chatState.activeCharacterId = firstMyChar.id;
-        }
+        chatState.activeCharacterId = null;
 
         startMessageSyncLoop();
     } else if (roomTitle) {
@@ -331,6 +335,15 @@ function setupPresence() {
                 state[id].forEach(client => {
                     uniqueUsers.set(client.id, client);
                 });
+            }
+
+            // Encerra conexões WebRTC de espectadores que saíram da sala
+            if (chatState.isHost) {
+                for (const peerId of chatState.hostPeerConnections.keys()) {
+                    if (!uniqueUsers.has(peerId)) {
+                        closeHostPeerConnection(peerId);
+                    }
+                }
             }
 
             chatState.onlineUsers = uniqueUsers;
@@ -415,7 +428,7 @@ function updatePresenceUI() {
 }
 
 // ==========================================
-// 4.2 DETALHES E SALA
+// 4.2 DETALHES DA SALA
 // ==========================================
 async function loadRoomDetails() {
     const { data: room, error } = await supabase
@@ -428,7 +441,7 @@ async function loadRoomDetails() {
         chatState.hostUserId = room.created_by;
         chatState.isHost = room.created_by === chatState.currentUser.id;
         if (hostMediaControls) hostMediaControls.classList.toggle('hidden', !chatState.isHost);
-        if (chatState.isHost) loadMediaLibrary();
+        if (chatState.isHost) renderLocalMediaLibrary();
         if (roomTitle) roomTitle.textContent = room.title;
         
         if (roomInviteCode) {
@@ -477,98 +490,324 @@ async function loadRoomUserProfiles() {
     updateMessageSenderNames();
 }
 
-function setupMediaBroadcast() {
-    if (!chatState.roomId) return;
-    chatState.mediaChannel = supabase.channel(`room_${chatState.roomId}_media`, {
-        config: { private: true, broadcast: { ack: true, self: false } }
-    });
-    chatState.mediaChannel
-        .on('broadcast', { event: 'media_state' }, ({ payload }) => {
-            if (!payload || payload.host_id !== chatState.hostUserId || chatState.isHost) return;
-            if (Number.isFinite(payload.sequence) && payload.sequence <= chatState.lastMediaSequence) return;
-            if (Number.isFinite(payload.sequence)) chatState.lastMediaSequence = payload.sequence;
-            applyRemoteMediaState({ ...payload, received_at: performance.now() });
-        })
-        .subscribe((status, error) => {
-            if (status === 'SUBSCRIBED') {
-                chatState.mediaRealtimeConnected = true;
-                chatState.mediaRealtimeError = false;
-                console.info('Canal de vídeo conectado:', chatState.roomId);
-                updateMediaButtons();
-                if (chatState.isHost && chatState.activeMedia) broadcastMediaState();
-            }
-            if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-                chatState.mediaRealtimeConnected = false;
-                chatState.mediaRealtimeError = true;
-                updateMediaButtons();
-                console.error('Canal de transmissão indisponível. Aplique as políticas RLS de transmissão no Supabase.', status, error);
-                if (chatState.isHost && hostMediaControls) hostMediaControls.title = 'Transmissão indisponível: aplique as políticas RLS do Realtime no Supabase';
-            }
-        });
-}
-
-async function loadMediaLibrary() {
+// ==========================================
+// 4.3 TRANSMISSÃO TEMPORÁRIA DE VÍDEO LOCAL (WEBRTC P2P + SUPABASE REALTIME)
+// ==========================================
+function renderLocalMediaLibrary() {
     if (!chatState.isHost || !mediaLibrary) return;
-    const { data, error } = await supabase.storage.from('rooms').list(`media/${chatState.roomId}`, { limit: 100, sortBy: { column: 'name', order: 'asc' } });
-    if (error) { console.error('Erro ao carregar vídeos da sala:', error); return; }
-    const files = (data || []).filter(file => file.name && file.name !== '.emptyFolderPlaceholder');
-    chatState.mediaAssets = files.map(file => {
-        const path = `media/${chatState.roomId}/${file.name}`;
-        return { path, name: file.name.replace(/^[0-9a-f-]+-/i, ''), url: supabase.storage.from('rooms').getPublicUrl(path).data.publicUrl };
-    });
     const previous = mediaLibrary.value;
-    mediaLibrary.replaceChildren(new Option(chatState.mediaAssets.length ? 'Selecione um vídeo' : 'Nenhum vídeo adicionado', ''));
-    chatState.mediaAssets.forEach(asset => mediaLibrary.add(new Option(asset.name, asset.path)));
-    mediaLibrary.value = chatState.mediaAssets.some(asset => asset.path === previous) ? previous : '';
+    mediaLibrary.replaceChildren(
+        new Option(chatState.mediaAssets.length ? 'Selecione um vídeo' : 'Nenhum vídeo adicionado', '')
+    );
+    chatState.mediaAssets.forEach(asset => mediaLibrary.add(new Option(asset.name, asset.id)));
+    mediaLibrary.value = chatState.mediaAssets.some(asset => asset.id === previous)
+        ? previous
+        : (chatState.mediaAssets[0]?.id || '');
     mediaLibrary.disabled = !chatState.mediaAssets.length;
     updateMediaButtons();
 }
 
 function updateMediaButtons() {
-    const selected = chatState.mediaAssets.some(asset => asset.path === mediaLibrary?.value);
+    const selected = chatState.mediaAssets.some(asset => asset.id === mediaLibrary?.value);
     if (btnBroadcastMedia) btnBroadcastMedia.disabled = !chatState.isHost || !selected || !chatState.mediaRealtimeConnected;
     if (btnDeleteMedia) btnDeleteMedia.disabled = !chatState.isHost || !selected;
     if (mediaChannelStatus) {
         mediaChannelStatus.textContent = chatState.mediaRealtimeError
-            ? 'Canal bloqueado: aplique a migração no Supabase'
+            ? 'Canal de sinalização indisponível'
             : '';
         mediaChannelStatus.classList.toggle('hidden', !chatState.mediaRealtimeError);
         mediaChannelStatus.classList.toggle('media-channel-status-error', chatState.mediaRealtimeError);
     }
 }
 
-async function uploadRoomMedia(files) {
+function addLocalMediaFiles(files) {
     if (!chatState.isHost || !files?.length) return;
+    let addedLastId = null;
+
     for (const file of files) {
         if (!file.type.startsWith('video/')) continue;
-        const safeName = file.name.replace(/[^\w.-]/g, '_');
-        const path = `media/${chatState.roomId}/${crypto.randomUUID()}-${safeName}`;
-        const { error } = await supabase.storage.from('rooms').upload(path, file, { contentType: file.type, upsert: false });
-        if (error) { console.error('Erro ao enviar vídeo:', error); alert(`Não foi possível enviar ${file.name}. Confira o limite e as políticas do Storage.`); }
+        const id = crypto.randomUUID();
+        const objectUrl = URL.createObjectURL(file);
+        chatState.mediaAssets.push({
+            id,
+            name: file.name,
+            file,
+            url: objectUrl
+        });
+        addedLastId = id;
     }
-    await loadMediaLibrary();
+
+    renderLocalMediaLibrary();
+    if (addedLastId && mediaLibrary) {
+        mediaLibrary.value = addedLastId;
+        updateMediaButtons();
+    }
 }
 
-function buildMediaState() {
-    const video = mediaBroadcastVideo;
-    return {
-        host_id: chatState.currentUser.id,
-        active: !!chatState.activeMedia,
-        path: chatState.activeMedia?.path || null,
-        url: chatState.activeMedia?.url || null,
-        title: chatState.activeMedia?.name || '',
-        position: video?.currentTime || 0,
-        paused: video?.paused ?? true,
-        playback_rate: video?.playbackRate || 1,
-        sequence: ++chatState.mediaSequence,
-        sent_at: Date.now()
+function clearLocalMediaAssets() {
+    chatState.mediaAssets.forEach(asset => {
+        if (asset.url) URL.revokeObjectURL(asset.url);
+    });
+    chatState.mediaAssets = [];
+    if (mediaLibrary) {
+        mediaLibrary.replaceChildren(new Option('Nenhum vídeo adicionado', ''));
+        mediaLibrary.value = '';
+        mediaLibrary.disabled = true;
+    }
+    updateMediaButtons();
+}
+
+async function sendMediaSignal(event, payload) {
+    if (!chatState.mediaChannel) return false;
+    const result = await chatState.mediaChannel.send({
+        type: 'broadcast',
+        event,
+        payload: {
+            ...payload,
+            from_id: chatState.currentUser.id,
+            sent_at: Date.now()
+        }
+    });
+    const status = typeof result === 'string' ? result : result?.status;
+    return status === 'ok';
+}
+
+function closeHostPeerConnection(peerId) {
+    const pc = chatState.hostPeerConnections.get(peerId);
+    if (pc) {
+        try { pc.close(); } catch (_) {}
+        chatState.hostPeerConnections.delete(peerId);
+    }
+    chatState.pendingHostIceCandidates.delete(peerId);
+}
+
+function closeAllHostPeerConnections() {
+    for (const peerId of [...chatState.hostPeerConnections.keys()]) {
+        closeHostPeerConnection(peerId);
+    }
+}
+
+function closeViewerPeerConnection() {
+    if (chatState.viewerPeerConnection) {
+        try { chatState.viewerPeerConnection.close(); } catch (_) {}
+        chatState.viewerPeerConnection = null;
+    }
+    chatState.pendingViewerIceCandidates = [];
+}
+
+function captureLocalVideoStream(videoEl) {
+    if (!videoEl) return null;
+    if (typeof videoEl.captureStream === 'function') return videoEl.captureStream();
+    if (typeof videoEl.mozCaptureStream === 'function') return videoEl.mozCaptureStream();
+    return null;
+}
+
+async function createOfferForViewer(viewerId) {
+    if (!chatState.isHost || !chatState.activeMedia || !chatState.localMediaStream) return;
+    if (!viewerId || viewerId === chatState.currentUser.id) return;
+
+    closeHostPeerConnection(viewerId);
+
+    const pc = new RTCPeerConnection(RTC_ICE_CONFIG);
+    chatState.hostPeerConnections.set(viewerId, pc);
+
+    chatState.localMediaStream.getTracks().forEach(track => {
+        pc.addTrack(track, chatState.localMediaStream);
+    });
+
+    pc.onicecandidate = ({ candidate }) => {
+        if (candidate) {
+            sendMediaSignal('webrtc_ice', {
+                to_id: viewerId,
+                candidate: candidate.toJSON()
+            });
+        }
     };
+
+    pc.onconnectionstatechange = () => {
+        if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+            closeHostPeerConnection(viewerId);
+        }
+    };
+
+    try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await sendMediaSignal('webrtc_offer', {
+            to_id: viewerId,
+            title: chatState.activeMedia.name,
+            sdp: pc.localDescription
+        });
+    } catch (error) {
+        console.error('Erro ao criar oferta WebRTC para espectador:', error);
+        closeHostPeerConnection(viewerId);
+    }
 }
 
-async function broadcastMediaState() {
-    if (!chatState.isHost || !chatState.mediaChannel || !chatState.activeMedia) return;
-    const result = await chatState.mediaChannel.send({ type: 'broadcast', event: 'media_state', payload: buildMediaState() });
-    if (result?.status !== 'ok') console.error('Falha ao sincronizar a transmissão:', result?.error || result);
+async function handleViewerOffer(payload) {
+    if (chatState.isHost) return;
+    if (payload.from_id !== chatState.hostUserId) return;
+    if (payload.to_id && payload.to_id !== chatState.currentUser.id) return;
+    if (!payload.sdp || !mediaBroadcast || !mediaBroadcastVideo) return;
+
+    closeViewerPeerConnection();
+
+    const pc = new RTCPeerConnection(RTC_ICE_CONFIG);
+    chatState.viewerPeerConnection = pc;
+
+    pc.ontrack = (event) => {
+        const [remoteStream] = event.streams;
+        if (!remoteStream) return;
+
+        mediaBroadcast.classList.remove('hidden');
+        mediaBroadcastTitle.textContent = payload.title || 'Transmissão da sala';
+        btnStopMedia?.classList.add('hidden');
+        mediaBroadcastVideo.controls = false;
+
+        if (mediaBroadcastVideo.srcObject !== remoteStream) {
+            mediaBroadcastVideo.srcObject = remoteStream;
+        }
+
+        mediaBroadcastVideo.muted = false;
+        chatState.mediaMutedForAutoplay = false;
+        btnEnableMediaAudio?.classList.add('hidden');
+        mediaAutoplayNotice?.classList.add('hidden');
+
+        mediaBroadcastVideo.play().catch(() => {
+            showAutoplayFallback();
+        });
+    };
+
+    pc.onicecandidate = ({ candidate }) => {
+        if (candidate) {
+            sendMediaSignal('webrtc_ice', {
+                to_id: chatState.hostUserId,
+                candidate: candidate.toJSON()
+            });
+        }
+    };
+
+    pc.onconnectionstatechange = () => {
+        if (['failed', 'closed'].includes(pc.connectionState)) {
+            closeMediaBroadcast(false);
+        }
+    };
+
+    try {
+        await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+
+        const queued = chatState.pendingViewerIceCandidates.splice(0);
+        for (const candidate of queued) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+        }
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await sendMediaSignal('webrtc_answer', {
+            to_id: chatState.hostUserId,
+            sdp: pc.localDescription
+        });
+    } catch (error) {
+        console.error('Erro ao aceitar transmissão WebRTC:', error);
+        closeMediaBroadcast(false);
+    }
+}
+
+async function handleHostAnswer(payload) {
+    if (!chatState.isHost) return;
+    if (payload.to_id && payload.to_id !== chatState.currentUser.id) return;
+    const pc = chatState.hostPeerConnections.get(payload.from_id);
+    if (!pc || !payload.sdp) return;
+
+    try {
+        await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+        const queued = chatState.pendingHostIceCandidates.get(payload.from_id) || [];
+        chatState.pendingHostIceCandidates.delete(payload.from_id);
+        for (const candidate of queued) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+        }
+    } catch (error) {
+        console.error('Erro ao aplicar resposta WebRTC:', error);
+    }
+}
+
+async function handleIceCandidate(payload) {
+    if (payload.to_id && payload.to_id !== chatState.currentUser.id) return;
+    if (!payload.candidate) return;
+
+    if (chatState.isHost) {
+        const pc = chatState.hostPeerConnections.get(payload.from_id);
+        if (pc && pc.remoteDescription) {
+            await pc.addIceCandidate(new RTCIceCandidate(payload.candidate)).catch(() => {});
+        } else {
+            const list = chatState.pendingHostIceCandidates.get(payload.from_id) || [];
+            list.push(payload.candidate);
+            chatState.pendingHostIceCandidates.set(payload.from_id, list);
+        }
+    } else if (payload.from_id === chatState.hostUserId) {
+        const pc = chatState.viewerPeerConnection;
+        if (pc && pc.remoteDescription) {
+            await pc.addIceCandidate(new RTCIceCandidate(payload.candidate)).catch(() => {});
+        } else {
+            chatState.pendingViewerIceCandidates.push(payload.candidate);
+        }
+    }
+}
+
+function setupMediaBroadcast() {
+    if (!chatState.roomId) return;
+    chatState.mediaChannel = supabase.channel(`room_${chatState.roomId}_media`, {
+        config: { broadcast: { ack: false, self: false } }
+    });
+
+    chatState.mediaChannel
+        .on('broadcast', { event: 'webrtc_join' }, ({ payload }) => {
+            if (!payload || !chatState.isHost || !chatState.activeMedia) return;
+            if (payload.from_id && payload.from_id !== chatState.currentUser.id) {
+                createOfferForViewer(payload.from_id);
+            }
+        })
+        .on('broadcast', { event: 'webrtc_live' }, ({ payload }) => {
+            if (!payload || chatState.isHost) return;
+            if (payload.from_id === chatState.hostUserId) {
+                sendMediaSignal('webrtc_join', { to_id: chatState.hostUserId });
+            }
+        })
+        .on('broadcast', { event: 'webrtc_offer' }, ({ payload }) => {
+            if (payload) handleViewerOffer(payload);
+        })
+        .on('broadcast', { event: 'webrtc_answer' }, ({ payload }) => {
+            if (payload) handleHostAnswer(payload);
+        })
+        .on('broadcast', { event: 'webrtc_ice' }, ({ payload }) => {
+            if (payload) handleIceCandidate(payload);
+        })
+        .on('broadcast', { event: 'webrtc_stop' }, ({ payload }) => {
+            if (!payload || chatState.isHost) return;
+            if (payload.from_id === chatState.hostUserId) {
+                closeMediaBroadcast(false);
+            }
+        })
+        .subscribe((status, error) => {
+            if (status === 'SUBSCRIBED') {
+                chatState.mediaRealtimeConnected = true;
+                chatState.mediaRealtimeError = false;
+                updateMediaButtons();
+
+                if (chatState.isHost && chatState.activeMedia) {
+                    sendMediaSignal('webrtc_live', { title: chatState.activeMedia.name });
+                } else if (!chatState.isHost && chatState.hostUserId) {
+                    // Solicita a transmissão caso o anfitrião já esteja ao vivo ao entrar
+                    sendMediaSignal('webrtc_join', { to_id: chatState.hostUserId });
+                }
+            }
+            if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+                chatState.mediaRealtimeConnected = false;
+                chatState.mediaRealtimeError = true;
+                updateMediaButtons();
+                console.error('Canal de transmissão indisponível:', status, error);
+            }
+        });
 }
 
 function showAutoplayFallback() {
@@ -579,43 +818,27 @@ function showAutoplayFallback() {
     mediaBroadcastVideo?.play().catch(() => {});
 }
 
-async function applyRemoteMediaState(payload) {
-    chatState.remoteMediaState = payload;
-    if (!payload.active) { closeMediaBroadcast(false); return; }
-    if (!mediaBroadcast || !mediaBroadcastVideo) return;
-    mediaBroadcast.classList.remove('hidden');
-    mediaBroadcastTitle.textContent = payload.title || 'Transmissão da sala';
-    btnStopMedia?.classList.add('hidden');
-    btnEnableMediaAudio?.classList.toggle('hidden', !chatState.mediaMutedForAutoplay);
-    mediaAutoplayNotice?.classList.toggle('hidden', !chatState.mediaMutedForAutoplay);
-    const desiredUrl = payload.url;
-    if (desiredUrl && mediaBroadcastVideo.src !== desiredUrl) {
-        mediaBroadcastVideo.src = desiredUrl;
-        mediaBroadcastVideo.load();
-    }
-    if (mediaBroadcastVideo.readyState < 1) return;
-    const elapsed = payload.paused ? 0 : Math.max(0, performance.now() - (payload.received_at || performance.now())) / 1000 * (payload.playback_rate || 1);
-    const desiredPosition = Math.max(0, payload.position + elapsed);
-    if (Math.abs(mediaBroadcastVideo.currentTime - desiredPosition) > 0.25) {
-        try { mediaBroadcastVideo.currentTime = desiredPosition; } catch (_) { return; }
-    }
-    mediaBroadcastVideo.playbackRate = payload.playback_rate || 1;
-    if (payload.paused) mediaBroadcastVideo.pause();
-    else {
-        try { await mediaBroadcastVideo.play(); }
-        catch (_) { showAutoplayFallback(); }
-    }
-}
-
 async function startMediaBroadcast() {
     if (!chatState.isHost) return;
     if (!chatState.mediaRealtimeConnected) {
-        alert('A transmissão não pode iniciar porque o canal Realtime da sala não está autorizado. Aplique a migração de transmissão no Supabase e tente novamente.');
+        alert('Aguarde a conexão do canal da sala para iniciar a transmissão.');
         return;
     }
-    const asset = chatState.mediaAssets.find(item => item.path === mediaLibrary?.value);
+
+    const asset = chatState.mediaAssets.find(item => item.id === mediaLibrary?.value);
     if (!asset) return;
+
+    // Encerra transmissão anterior se houver
+    if (chatState.activeMedia) {
+        closeAllHostPeerConnections();
+        if (chatState.localMediaStream) {
+            chatState.localMediaStream.getTracks().forEach(track => track.stop());
+            chatState.localMediaStream = null;
+        }
+    }
+
     chatState.activeMedia = asset;
+    mediaBroadcastVideo.srcObject = null;
     mediaBroadcastVideo.src = asset.url;
     mediaBroadcastVideo.controls = true;
     mediaBroadcastVideo.muted = false;
@@ -624,43 +847,73 @@ async function startMediaBroadcast() {
     btnStopMedia?.classList.remove('hidden');
     btnEnableMediaAudio?.classList.add('hidden');
     mediaAutoplayNotice?.classList.add('hidden');
-    try { await mediaBroadcastVideo.play(); } catch (error) { console.error('Não foi possível iniciar o vídeo:', error); }
-    await broadcastMediaState();
-    clearInterval(chatState.mediaSyncTimer);
-    // OTIMIZAÇÃO: 1000ms evita estourar a cota de mensagens Realtime mantendo sincronia fina
-    chatState.mediaSyncTimer = setInterval(broadcastMediaState, 1000);
-    if (mediaBroadcast.requestFullscreen) mediaBroadcast.requestFullscreen().catch(() => {});
+
+    try {
+        await mediaBroadcastVideo.play();
+    } catch (error) {
+        console.error('Não foi possível reproduzir o vídeo local:', error);
+        alert('Seu navegador não conseguiu reproduzir este formato de vídeo.');
+        await closeMediaBroadcast(false);
+        return;
+    }
+
+    const stream = captureLocalVideoStream(mediaBroadcastVideo);
+    if (!stream) {
+        alert('Este navegador não suporta captura direta de stream de vídeo.');
+        await closeMediaBroadcast(false);
+        return;
+    }
+
+    chatState.localMediaStream = stream;
+
+    // Conecta imediatamente com todos os membros online na sala e avisa no canal
+    for (const userId of chatState.onlineUsers.keys()) {
+        if (userId !== chatState.currentUser.id) {
+            createOfferForViewer(userId);
+        }
+    }
+    await sendMediaSignal('webrtc_live', { title: asset.name });
+
+    if (mediaBroadcast.requestFullscreen) {
+        mediaBroadcast.requestFullscreen().catch(() => {});
+    }
 }
 
 async function closeMediaBroadcast(notify = false) {
-    clearInterval(chatState.mediaSyncTimer);
-    chatState.mediaSyncTimer = null;
-    chatState.activeMedia = null;
-    if (notify && chatState.isHost && chatState.mediaChannel) {
-        const stopPayload = { host_id: chatState.currentUser.id, active: false, sequence: ++chatState.mediaSequence, sent_at: Date.now() };
-        let delivered = false;
-        for (let attempt = 0; attempt < 3 && !delivered; attempt += 1) {
-            const result = await chatState.mediaChannel.send({ type: 'broadcast', event: 'media_state', payload: stopPayload });
-            delivered = result?.status === 'ok';
-            if (!delivered && attempt < 2) await new Promise(resolve => setTimeout(resolve, 200));
-        }
-        if (!delivered) {
-            console.error('O comando para interromper a transmissão não foi confirmado pelo Realtime.');
-            chatState.mediaRealtimeError = true;
-            updateMediaButtons();
-        }
+    if (notify && chatState.isHost && chatState.mediaChannel && chatState.mediaRealtimeConnected) {
+        await sendMediaSignal('webrtc_stop', {});
     }
-    chatState.remoteMediaState = null;
-    if (mediaBroadcastVideo) { mediaBroadcastVideo.pause(); mediaBroadcastVideo.removeAttribute('src'); mediaBroadcastVideo.load(); }
+
+    chatState.activeMedia = null;
+    closeAllHostPeerConnections();
+    closeViewerPeerConnection();
+
+    if (chatState.localMediaStream) {
+        chatState.localMediaStream.getTracks().forEach(track => track.stop());
+        chatState.localMediaStream = null;
+    }
+
+    if (mediaBroadcastVideo) {
+        mediaBroadcastVideo.pause();
+        mediaBroadcastVideo.srcObject = null;
+        mediaBroadcastVideo.removeAttribute('src');
+        mediaBroadcastVideo.load();
+    }
+
     mediaBroadcast?.classList.add('hidden');
     btnStopMedia?.classList.add('hidden');
     btnEnableMediaAudio?.classList.add('hidden');
     mediaAutoplayNotice?.classList.add('hidden');
-    if (document.fullscreenElement === mediaBroadcast) document.exitFullscreen().catch(() => {});
+    if (document.fullscreenElement === mediaBroadcast) {
+        document.exitFullscreen().catch(() => {});
+    }
 }
 
 if (btnAddMedia) btnAddMedia.addEventListener('click', () => chatState.isHost && mediaFileInput?.click());
-if (mediaFileInput) mediaFileInput.addEventListener('change', async () => { await uploadRoomMedia(mediaFileInput.files); mediaFileInput.value = ''; });
+if (mediaFileInput) mediaFileInput.addEventListener('change', () => {
+    addLocalMediaFiles(mediaFileInput.files);
+    mediaFileInput.value = '';
+});
 if (mediaLibrary) mediaLibrary.addEventListener('change', updateMediaButtons);
 if (mediaControlsToggle) mediaControlsToggle.addEventListener('click', () => {
     const expanded = mediaControlsToggle.getAttribute('aria-expanded') !== 'true';
@@ -674,12 +927,14 @@ if (mediaControlsToggle) mediaControlsToggle.addEventListener('click', () => {
 if (btnBroadcastMedia) btnBroadcastMedia.addEventListener('click', startMediaBroadcast);
 if (btnDeleteMedia) btnDeleteMedia.addEventListener('click', async () => {
     if (!chatState.isHost) return;
-    const asset = chatState.mediaAssets.find(item => item.path === mediaLibrary.value);
-    if (!asset || !confirm(`Excluir o vídeo "${asset.name}"?`)) return;
-    if (chatState.activeMedia?.path === asset.path) await closeMediaBroadcast(true);
-    const { error } = await supabase.storage.from('rooms').remove([asset.path]);
-    if (error) { console.error('Erro ao excluir vídeo:', error); alert('Não foi possível excluir o vídeo.'); return; }
-    await loadMediaLibrary();
+    const index = chatState.mediaAssets.findIndex(item => item.id === mediaLibrary.value);
+    if (index === -1) return;
+    const [removed] = chatState.mediaAssets.splice(index, 1);
+    if (chatState.activeMedia?.id === removed.id) {
+        await closeMediaBroadcast(true);
+    }
+    if (removed.url) URL.revokeObjectURL(removed.url);
+    renderLocalMediaLibrary();
 });
 if (btnStopMedia) btnStopMedia.addEventListener('click', () => chatState.isHost && closeMediaBroadcast(true));
 if (btnEnableMediaAudio) btnEnableMediaAudio.addEventListener('click', async () => {
@@ -690,8 +945,11 @@ if (btnEnableMediaAudio) btnEnableMediaAudio.addEventListener('click', async () 
     try { await mediaBroadcastVideo.play(); } catch (_) { showAutoplayFallback(); }
 });
 if (mediaBroadcastVideo) {
-    mediaBroadcastVideo.addEventListener('loadedmetadata', () => { if (!chatState.isHost && chatState.remoteMediaState) applyRemoteMediaState(chatState.remoteMediaState); });
-    ['play', 'pause', 'seeked', 'ratechange'].forEach(eventName => mediaBroadcastVideo.addEventListener(eventName, () => { if (chatState.isHost && chatState.activeMedia) broadcastMediaState(); }));
+    mediaBroadcastVideo.addEventListener('ended', () => {
+        if (chatState.isHost && chatState.activeMedia) {
+            closeMediaBroadcast(true);
+        }
+    });
 }
 
 async function fetchRoomCharacters() {
@@ -775,7 +1033,6 @@ async function fetchUserWalletCharacters() {
             .order('created_at', { ascending: true }),
         supabase
             .from('characters')
-            // OTIMIZAÇÃO: Seleciona apenas os campos usados na carteira da sala
             .select('id, folder_id, name, avatar_url, initials, color')
             .eq('user_id', chatState.currentUser.id)
     ]);
@@ -906,7 +1163,6 @@ function hideOlderMessagesLoader() {
 }
 
 function clearRoomTransientState() {
-    // Limpa mensagens carregadas e remove a barra "Não lida" da sessão anterior
     chatState.renderedMessageIds.clear();
     chatState.messagesById.clear();
     chatState.pendingMessageEvents.length = 0;
@@ -921,10 +1177,10 @@ function clearRoomTransientState() {
         chatMessagesContainer.replaceChildren();
     }
 
-    // Limpa personagens da sala carregados em memória e no deck
     chatState.roomCharacters = [];
     chatState.activeCharacterId = null;
     activeCharacterPage = 0;
+    chatState.unlockedCharacterPages = new Set([0]);
     removeContextMenu();
     if (characterProfileModal) {
         characterProfileModal.classList.add('hidden');
@@ -957,10 +1213,7 @@ async function resetRoomToInitialSnapshot() {
             }
         });
 
-        const firstMyChar = chatState.roomCharacters.find(c => c.ownerId === chatState.currentUser.id);
-        if (firstMyChar) {
-            chatState.activeCharacterId = firstMyChar.id;
-        }
+        chatState.activeCharacterId = null;
 
         renderDeck();
         updateInputUI();
@@ -970,20 +1223,22 @@ async function resetRoomToInitialSnapshot() {
 }
 
 function setupPageLifecycleReset() {
-    // Limpa mensagens, barra "Não lida" e personagens assim que o usuário sai ou recarrega a página
     window.addEventListener('pagehide', () => {
         markCurrentRoomAsViewed();
+        closeMediaBroadcast(chatState.isHost);
+        clearLocalMediaAssets();
         chatState.wasHiddenOrLeft = true;
         clearRoomTransientState();
     });
 
     window.addEventListener('beforeunload', () => {
         markCurrentRoomAsViewed();
+        closeMediaBroadcast(chatState.isHost);
+        clearLocalMediaAssets();
         chatState.wasHiddenOrLeft = true;
         clearRoomTransientState();
     });
 
-    // Quando o usuário volta para a página (inclusive via bfcache ou troca de aba/app), recarrega sem a barra "Não lida"
     window.addEventListener('pageshow', event => {
         if (event.persisted || chatState.wasHiddenOrLeft) {
             chatState.wasHiddenOrLeft = false;
@@ -1051,7 +1306,6 @@ async function loadOlderMessages() {
     const beforeLoaderScrollHeight = chatMessagesContainer.scrollHeight;
     const beforeLoaderScrollTop = chatMessagesContainer.scrollTop;
     showOlderMessagesLoader();
-    // Mantém a posição visual mesmo com a entrada do indicador no topo
     chatMessagesContainer.scrollTop = beforeLoaderScrollTop + (chatMessagesContainer.scrollHeight - beforeLoaderScrollHeight);
 
     try {
@@ -1106,7 +1360,6 @@ function setupMessageHistoryScroll() {
         }
     }, { passive: true });
 
-    // Caso as 10 mensagens iniciais não preencham toda a altura da tela, permite carregar ao tentar subir
     chatMessagesContainer.addEventListener('wheel', event => {
         if (event.deltaY < 0 && chatMessagesContainer.scrollTop <= 0) {
             loadOlderMessages();
@@ -1153,14 +1406,12 @@ function startMessageSyncLoop() {
     if (chatState.messageSyncTimer) clearInterval(chatState.messageSyncTimer);
     chatState.messageSyncTimer = setInterval(() => {
         syncNewMessages();
-       // syncRoomCharacters();
     }, 10000);
 }
 
 function renderAllMessages(messages) {
     if (!chatMessagesContainer) return;
     
-    // OTIMIZAÇÃO: Monta todo o histórico em DocumentFragment antes de injetar no DOM
     const fragment = document.createDocumentFragment();
     messages.forEach(msg => appendMessageToUI(msg, { container: fragment, skipScroll: true }));
     chatMessagesContainer.replaceChildren(fragment);
@@ -1269,7 +1520,6 @@ function appendMessageToUI(msg, { container = chatMessagesContainer, skipScroll 
         element.dataset.messageId && Number(element.dataset.createdAt || 0) > timestamp
     );
 
-    // Insere a barra "Não lida" exatamente acima da primeira mensagem não lida desta sessão
     const isUnreadFromOther = !isMine
         && !chatState.unreadDividerInserted
         && Number.isFinite(chatState.unreadSinceTimestamp)
@@ -1456,7 +1706,6 @@ function applyMessageUpdate(updated) {
 }
 
 async function processIncomingMessage(newMsg) {
-    // OTIMIZAÇÃO: Verifica primeiro o cache em memória antes de consultar o Supabase
     if (newMsg.character_id && !newMsg.characters) {
         const cachedChar = chatState.roomCharacters.find(c => c.id === newMsg.character_id);
         if (cachedChar) {
@@ -1656,7 +1905,7 @@ function subscribeToMessages() {
 }
 
 // ==========================================
-// 6. ORDENAÇÃO E RENDERIZAÇÃO DO DECK
+// 6. ORDENAÇÃO E RENDERIZAÇÃO DO DECK (FOTOS SOB DEMANDA / EM LOTES DE 10)
 // ==========================================
 function getSortedCharacters() {
     return [...chatState.roomCharacters].sort((a, b) => {
@@ -1679,12 +1928,96 @@ function getSortedCharacters() {
     });
 }
 
+function loadCharacterSlotAvatar(slot) {
+    if (!slot || slot.dataset.loading === 'true') return;
+    const url = slot.getAttribute('data-avatar-src');
+    const name = slot.getAttribute('data-char-name') || 'Personagem';
+    const initials = slot.getAttribute('data-char-initials') || '??';
+    const color = slot.getAttribute('data-char-color') || '#9333ea';
+
+    if (!url) {
+        slot.outerHTML = `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#1a1b26;color:${color};font-weight:bold;">${initials}</div>`;
+        return;
+    }
+
+    slot.dataset.loading = 'true';
+    const loader = new Image();
+    loader.decoding = 'async';
+    loader.onload = () => {
+        chatState.loadedAvatarUrls.add(url);
+        if (!slot.isConnected) return;
+        const img = document.createElement('img');
+        img.src = url;
+        img.alt = name;
+        img.decoding = 'async';
+        slot.replaceWith(img);
+    };
+    loader.onerror = () => {
+        if (!slot.isConnected) return;
+        const fallback = document.createElement('div');
+        fallback.style.cssText = `width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#1a1b26;color:${color};font-weight:bold;`;
+        fallback.textContent = initials;
+        slot.replaceWith(fallback);
+    };
+    loader.src = url;
+}
+
+function hydrateCharacterAvatarBatch(pageIndex) {
+    if (!characterList) return;
+    chatState.unlockedCharacterPages.add(pageIndex);
+
+    const pages = characterList.querySelectorAll('.char-page');
+    const targetPage = pages[pageIndex];
+    if (!targetPage) return;
+
+    targetPage.querySelectorAll('.char-avatar-slot[data-avatar-src]').forEach(slot => {
+        loadCharacterSlotAvatar(slot);
+    });
+}
+
+function hydrateVisibleCharacterAvatars() {
+    if (!characterList) return;
+
+    const isMobile = window.matchMedia('(max-width: 700px)').matches;
+    if (isMobile) {
+        hydrateCharacterAvatarBatch(activeCharacterPage);
+        return;
+    }
+
+    const scrollContainer = characterListViewport || characterList;
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const visibleLeft = containerRect.left - 120;
+    const visibleRight = containerRect.right + 180;
+
+    characterList.querySelectorAll('.char-item[data-id]').forEach((item, index) => {
+        const slot = item.querySelector('.char-avatar-slot[data-avatar-src]');
+        if (!slot) return;
+
+        const rect = item.getBoundingClientRect();
+        const isInViewport = rect.width > 0 && rect.right >= visibleLeft && rect.left <= visibleRight;
+        if (isInViewport) {
+            chatState.unlockedCharacterPages.add(Math.floor(index / CHARACTER_AVATAR_BATCH_SIZE));
+            loadCharacterSlotAvatar(slot);
+        }
+    });
+}
+
 function renderDeck() {
     if (!characterList) return;
 
     characterList.innerHTML = '';
     const sortedCharacters = getSortedCharacters();
-    const characterItems = sortedCharacters.map(char => {
+    const pageCount = Math.max(1, Math.ceil(sortedCharacters.length / CHARACTER_AVATAR_BATCH_SIZE));
+    activeCharacterPage = Math.min(activeCharacterPage, pageCount - 1);
+    chatState.unlockedCharacterPages.add(activeCharacterPage);
+
+    const characterItems = sortedCharacters.map((char, index) => {
+        const batchPage = Math.floor(index / CHARACTER_AVATAR_BATCH_SIZE);
+        const isAlreadyCached = Boolean(char.avatar && chatState.loadedAvatarUrls.has(char.avatar));
+        const shouldLoadAvatarNow = Boolean(
+            char.avatar && (isAlreadyCached || chatState.unlockedCharacterPages.has(batchPage))
+        );
+
         const isMyChar = char.ownerId === chatState.currentUser.id;
         const isActive = isMyChar && char.id === chatState.activeCharacterId;
         const isStandby = isMyChar && !isActive;
@@ -1699,7 +2032,6 @@ function renderDeck() {
         
         let wrapperStyle = !char.avatar ? `border-color: ${char.color};` : '';
 
-        // INJEÇÃO DA COR DINÂMICA
         if (isActive) {
             stateClass = 'active';
             badgeHTML = `<span class="status-badge active-check" style="background-color: ${char.color}; color: #fff;">${ICONS.check}</span>`;
@@ -1719,9 +2051,14 @@ function renderDeck() {
         charItem.className = `char-item ${stateClass}`;
         charItem.setAttribute('data-id', char.id);
 
-        let avatarImgOrInitials = char.avatar 
-            ? `<img src="${char.avatar}" alt="${char.name}" loading="lazy">` 
-            : `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #1a1b26; color: ${char.color}; font-weight: bold;">${char.initials}</div>`;
+        let avatarImgOrInitials;
+        if (char.avatar && isAlreadyCached) {
+            avatarImgOrInitials = `<img src="${char.avatar}" alt="${escapeHtml(char.name)}" decoding="async">`;
+        } else if (char.avatar) {
+            avatarImgOrInitials = `<div class="char-avatar-slot" data-avatar-src="${escapeHtml(char.avatar)}" data-char-name="${escapeHtml(char.name)}" data-char-initials="${escapeHtml(char.initials)}" data-char-color="${escapeHtml(char.color)}" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#1a1b26;color:${char.color};">${ICONS.spinner}</div>`;
+        } else {
+            avatarImgOrInitials = `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #1a1b26; color: ${char.color}; font-weight: bold;">${char.initials}</div>`;
+        }
 
         charItem.innerHTML = `
             <div class="char-avatar-wrapper" title="${tooltipText}" style="${wrapperStyle}">
@@ -1730,6 +2067,11 @@ function renderDeck() {
             </div>
             <span>${char.name.split(' ')[0]}</span>
         `;
+
+        if (shouldLoadAvatarNow && !isAlreadyCached) {
+            const slot = charItem.querySelector('.char-avatar-slot');
+            if (slot) loadCharacterSlotAvatar(slot);
+        }
 
         charItem.addEventListener('click', () => {
             if (isSolto) {
@@ -1750,9 +2092,6 @@ function renderDeck() {
         return charItem;
     });
 
-    const pageCount = Math.max(1, Math.ceil(characterItems.length / MOBILE_CHARACTER_PAGE_SIZE));
-    activeCharacterPage = Math.min(activeCharacterPage, pageCount - 1);
-
     const fragment = document.createDocumentFragment();
     for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
         const page = document.createElement('div');
@@ -1760,7 +2099,7 @@ function renderDeck() {
         page.setAttribute('role', 'group');
         page.setAttribute('aria-label', `Página ${pageIndex + 1} de ${pageCount} de personagens`);
         characterItems
-            .slice(pageIndex * MOBILE_CHARACTER_PAGE_SIZE, (pageIndex + 1) * MOBILE_CHARACTER_PAGE_SIZE)
+            .slice(pageIndex * CHARACTER_AVATAR_BATCH_SIZE, (pageIndex + 1) * CHARACTER_AVATAR_BATCH_SIZE)
             .forEach(item => page.appendChild(item));
         fragment.appendChild(page);
     }
@@ -1777,12 +2116,15 @@ function renderDeck() {
 
     renderCharacterPageIndicators(pageCount);
     updateCharacterPagePosition();
+    requestAnimationFrame(hydrateVisibleCharacterAvatars);
 }
 
 function updateCharacterPagePosition() {
     if (!characterList) return;
     const isMobile = window.matchMedia('(max-width: 700px)').matches;
     characterList.style.transform = isMobile ? `translateX(-${activeCharacterPage * 100}%)` : '';
+    hydrateCharacterAvatarBatch(activeCharacterPage);
+    requestAnimationFrame(hydrateVisibleCharacterAvatars);
 
     characterPageIndicators?.querySelectorAll('.character-page-dot').forEach((dot, index) => {
         dot.setAttribute('aria-current', String(index === activeCharacterPage));
@@ -1827,21 +2169,44 @@ if (characterListViewport) {
     });
 
     characterListViewport.addEventListener('pointercancel', () => { characterSwipeStartX = null; });
+    characterListViewport.addEventListener('scroll', hydrateVisibleCharacterAvatars, { passive: true });
 }
 
-window.addEventListener('resize', updateCharacterPagePosition);
+if (characterList) {
+    characterList.addEventListener('scroll', hydrateVisibleCharacterAvatars, { passive: true });
+}
 
-async function setActiveCharacter(charId) {
+window.addEventListener('resize', () => {
+    updateCharacterPagePosition();
+    hydrateVisibleCharacterAvatars();
+});
+
+function setActiveCharacter(charId) {
     const char = chatState.roomCharacters.find(c => c.id === charId);
-    if (char) {
-        char.lastUsed = Date.now();
-        await supabase
-            .from('room_characters')
-            .update({ last_used_at: new Date().toISOString() })
-            .eq('room_id', chatState.roomId)
-            .eq('character_id', charId);
-    }
+    if (!char || char.ownerId !== chatState.currentUser.id) return;
+
+    const nowIso = new Date().toISOString();
+    char.lastUsed = Date.now();
     chatState.activeCharacterId = charId;
+
+    renderDeck();
+    updateInputUI();
+
+    supabase
+        .from('room_characters')
+        .update({ last_used_at: nowIso })
+        .eq('room_id', chatState.roomId)
+        .eq('character_id', charId)
+        .eq('owner_id', chatState.currentUser.id)
+        .then(({ error }) => {
+            if (error) console.error('Falha ao salvar última utilização do personagem:', error);
+        });
+}
+
+function setCharacterStandby(charId) {
+    if (chatState.activeCharacterId === charId) {
+        chatState.activeCharacterId = null;
+    }
     renderDeck();
     updateInputUI();
 }
@@ -2024,9 +2389,8 @@ async function confirmAddCharacters() {
 
     await fetchRoomCharacters();
     
-    if (!chatState.activeCharacterId && chatState.roomCharacters.length > 0) {
-        const myChar = chatState.roomCharacters.find(c => c.ownerId === chatState.currentUser.id);
-        if (myChar) chatState.activeCharacterId = myChar.id;
+    if (chatState.activeCharacterId && !chatState.roomCharacters.some(c => c.id === chatState.activeCharacterId && c.ownerId === chatState.currentUser.id)) {
+        chatState.activeCharacterId = null;
     }
 
     closeAddCharacterModal();
@@ -2050,6 +2414,7 @@ function showContextMenu(event, character) {
 
     if (isMyChar) {
         menu.innerHTML = `
+            <div class="context-menu-item" data-action="standby">${ICONS.pause} Stand-by</div>
             <div class="context-menu-item" data-action="soltar">${ICONS.unlock} Soltar</div>
             <div class="context-menu-item danger" data-action="excluir">${ICONS.trash} Remover da sala</div>
         `;
@@ -2066,6 +2431,7 @@ function showContextMenu(event, character) {
 
     menu.addEventListener('click', (e) => {
         const action = e.target.closest('.context-menu-item')?.getAttribute('data-action');
+        if (action === 'standby') setCharacterStandby(character.id);
         if (action === 'assumir') assumirPersonagem(character.id);
         if (action === 'soltar') soltarPersonagem(character.id);
         if (action === 'excluir') excluirPersonagem(character.id);
@@ -2079,30 +2445,63 @@ function removeContextMenu() {
 }
 
 async function assumirPersonagem(charId) {
-    const { error } = await supabase
+    const char = chatState.roomCharacters.find(c => c.id === charId);
+    if (!char || char.ownerId !== null) return;
+
+    const prevOwnerId = char.ownerId;
+    const prevOwnerName = char.ownerName;
+    const prevLastUsed = char.lastUsed;
+    const prevActiveId = chatState.activeCharacterId;
+    const nowIso = new Date().toISOString();
+
+    char.ownerId = chatState.currentUser.id;
+    char.ownerName = 'Você';
+    char.lastUsed = Date.now();
+    chatState.activeCharacterId = charId;
+    renderDeck();
+    updateInputUI();
+
+    const { data, error } = await supabase
         .from('room_characters')
-        .update({ owner_id: chatState.currentUser.id, last_used_at: new Date().toISOString() })
+        .update({ owner_id: chatState.currentUser.id, last_used_at: nowIso })
         .eq('room_id', chatState.roomId)
         .eq('character_id', charId)
-        .is('owner_id', null);
+        .is('owner_id', null)
+        .select('id');
 
-    if (!error) {
-        await fetchRoomCharacters();
-        if (chatState.roomCharacters.some(character => character.id === charId && character.ownerId === chatState.currentUser.id)) {
-            chatState.activeCharacterId = charId;
-            await broadcastRoomCharactersChanged();
-        } else {
-            alert('Outro integrante assumiu esse personagem primeiro. A lista foi atualizada.');
-        }
-        renderDeck();
-        updateInputUI();
-    } else {
-        console.error('Falha ao assumir personagem:', error);
+    if (error || !data?.length) {
+        char.ownerId = prevOwnerId;
+        char.ownerName = prevOwnerName;
+        char.lastUsed = prevLastUsed;
+        chatState.activeCharacterId = prevActiveId;
         await syncRoomCharacters();
+        if (!error) {
+            alert('Outro integrante assumiu esse personagem primeiro. A lista foi atualizada.');
+        } else {
+            console.error('Falha ao assumir personagem:', error);
+        }
+        return;
     }
+
+    broadcastRoomCharactersChanged();
 }
 
 async function soltarPersonagem(charId) {
+    const char = chatState.roomCharacters.find(c => c.id === charId);
+    if (!char || char.ownerId !== chatState.currentUser.id) return;
+
+    const prevOwnerId = char.ownerId;
+    const prevOwnerName = char.ownerName;
+    const prevLastUsed = char.lastUsed;
+    const prevActiveId = chatState.activeCharacterId;
+
+    char.ownerId = null;
+    char.ownerName = null;
+    char.lastUsed = 0;
+    if (chatState.activeCharacterId === charId) chatState.activeCharacterId = null;
+    renderDeck();
+    updateInputUI();
+
     const { data, error } = await supabase
         .from('room_characters')
         .update({ owner_id: null, last_used_at: null })
@@ -2111,16 +2510,17 @@ async function soltarPersonagem(charId) {
         .eq('owner_id', chatState.currentUser.id)
         .select('id');
 
-    if (!error) {
-        await fetchRoomCharacters();
-        if (chatState.activeCharacterId === charId) chatState.activeCharacterId = null;
-        renderDeck();
-        updateInputUI();
-        if (data?.length) await broadcastRoomCharactersChanged();
-    } else {
+    if (error) {
+        char.ownerId = prevOwnerId;
+        char.ownerName = prevOwnerName;
+        char.lastUsed = prevLastUsed;
+        chatState.activeCharacterId = prevActiveId;
         console.error('Falha ao soltar personagem:', error);
         await syncRoomCharacters();
+        return;
     }
+
+    if (data?.length) broadcastRoomCharactersChanged();
 }
 
 async function excluirPersonagem(charId) {
@@ -2176,7 +2576,6 @@ if (toggleEncenacao) {
     });
 }
 
-// Função unificada para envio de mensagens
 async function sendMessage() {
     const content = chatInput.value.trim();
     if (!content || !chatState.roomId) return;
@@ -2218,7 +2617,6 @@ async function sendMessage() {
         return;
     }
 
-    // A atualização visual não depende da publicação do evento Realtime.
     const character = chatState.isEncenacaoEnabled && activeChar
         ? {
             id: activeChar.id,
@@ -2244,7 +2642,6 @@ async function sendMessage() {
 if (chatInput) {
     chatInput.addEventListener('input', updateTypingState);
     chatInput.addEventListener('focus', () => {
-        // Aguarda o teclado terminar de abrir antes de ajustar layout e scroll.
         setTimeout(() => {
             syncMobileViewport();
             window.scrollTo(0, 0);

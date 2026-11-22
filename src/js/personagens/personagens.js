@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase.js';
+import { openImageCropper } from '../utils/image-cropper.js';
 
 // Cores para a paleta idênticas às imagens de modelo
 const PALETTE_COLORS = [
@@ -207,7 +208,7 @@ function hexToRgb(hex) {
 }
 
 // ==========================================
-// 4. UPLOAD DE FOTO (DRAG & DROP / SELECT)
+// 4. UPLOAD E CORTE DE FOTO (DRAG & DROP / SELECT)
 // ==========================================
 function setupDropzone() {
     if (!uploadDropzone) return;
@@ -217,6 +218,7 @@ function setupDropzone() {
     inputAvatarFile.addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (file) handleImageFile(file);
+        inputAvatarFile.value = '';
     });
 
     uploadDropzone.addEventListener('dragover', (e) => {
@@ -238,15 +240,25 @@ function setupDropzone() {
     });
 }
 
-function handleImageFile(file) {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        currentAvatarBase64 = e.target.result;
+async function handleImageFile(file) {
+    try {
+        const cropped = await openImageCropper(file, {
+            title: 'Cortar foto do personagem',
+            aspectRatio: 1,
+            outputWidth: 400,
+            outputHeight: 400,
+            circular: true
+        });
+        if (!cropped) return;
+
+        currentAvatarBase64 = cropped.dataUrl;
         avatarPreview.src = currentAvatarBase64;
         avatarPreview.classList.remove('hidden');
         dropzoneContent.classList.add('hidden');
-    };
-    reader.readAsDataURL(file);
+    } catch (error) {
+        console.error('Erro ao recortar foto do personagem:', error);
+        alert('Não foi possível processar a imagem selecionada.');
+    }
 }
 
 function resetDropzone() {
