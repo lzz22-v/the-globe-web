@@ -4,6 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>theGlobe - Carteira de Personagens</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#111216">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="theGlobe">
+    <link rel="icon" type="image/png" href="/src/theGlobe-logo-colorida.png">
+    <link rel="apple-touch-icon" href="/src/theGlobe-logo-colorida.png">
+    <script type="module" src="src/js/pwa.js"></script>
+
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -16,37 +28,37 @@
     <div class="app-container">
         <aside class="sidebar">
             <div class="sidebar-header">
-                <div class="logo">the<span>Globe</span></div>
-                <button class="menu-toggle" id="menu-toggle">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                <h1 class="brand-logo">theGlobe</h1>
+                <button class="menu-toggle" id="menu-toggle" aria-label="Abrir menu">
+                    <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
                 </button>
             </div>
 
-            <div class="user-card">
-                <div class="avatar-wrapper">
-                    <img id="sidebar-avatar" src="https://i.pravatar.cc/150?img=20" alt="Avatar">
-                    <span class="status-dot"></span>
+            <div class="sidebar-user-card" style="cursor: pointer;" onclick="window.location.href='profile.html'" title="Abrir meu perfil">
+                <div class="user-avatar-small">
+                    <img id="sidebar-avatar" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ccc'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E" alt="Foto de perfil">
+                    <span class="status-dot online"></span>
                 </div>
-                <div class="user-info">
-                    <h4 id="sidebar-name">Mariana Costa</h4>
-                    <span id="sidebar-email">mariana.costa@email.com</span>
+                <div class="user-info-small">
+                    <h3 id="sidebar-name">Carregando...</h3>
+                    <p id="sidebar-email">...</p>
                 </div>
             </div>
 
             <nav class="sidebar-nav">
                 <span class="nav-label">MENU</span>
                 <a href="rooms.html" class="nav-item">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
-                    Minhas salas
+                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+                    <span class="nav-item-label">Minhas salas</span>
                 </a>
                 <a href="personagens.html" class="nav-item active">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                    Carteira de personagens
+                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"></path><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"></path></svg>
+                    <span class="nav-item-label">Carteira de personagens</span>
                 </a>
             </nav>
 
             <div class="sidebar-footer">
-                theGlobe v1.0.0-prototype
+                <span>theGlobe v1.0.0-prototype</span>
             </div>
         </aside>
 

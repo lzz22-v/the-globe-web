@@ -100,6 +100,7 @@ const chatState = {
     onlineUsers: new Map(),
     loadedAvatarUrls: new Set(),
     unlockedCharacterPages: new Set([0]),
+    characterDescriptionsCache: new Map(),
     mentionMenuOpen: false,
     mentionTriggerStart: -1,
     mentionQuery: '',
@@ -197,6 +198,7 @@ const chatMessagesContainer = document.getElementById('chat-messages') || docume
 let characterProfileModal = null;
 let activeCharacterPage = 0;
 let characterSwipeStartX = null;
+let characterAvatarObserver = null;
 const CHARACTER_AVATAR_BATCH_SIZE = 10;
 
 const toggleEncenacao = document.getElementById('toggle-encenacao');
@@ -328,7 +330,6 @@ async function initChat() {
         await Promise.all([
             loadRoomUserProfiles(),
             fetchRoomCharacters(),
-            fetchUserWalletCharacters(),
             fetchMessages()
         ]);
 
@@ -1037,8 +1038,6 @@ function buildReliableLocalStream(videoEl) {
         return rawStream;
     }
 
-    // Fallback: se o captureStream() nativo estiver mudo/sem quadros no compositor,
-    // espelha os quadros decodificados na resolução nativa do vídeo + faixa de áudio original.
     const width = videoEl.videoWidth || 1280;
     const height = videoEl.videoHeight || 720;
     const canvas = document.createElement('canvas');
@@ -1499,7 +1498,7 @@ async function fetchRoomCharacters() {
             character_id,
             owner_id,
             last_used_at,
-            characters:character_id (id, name, avatar_url, initials, color, description)
+            characters:character_id (id, name, avatar_url, initials, color)
         `)
         .eq('room_id', chatState.roomId);
 
@@ -1510,14 +1509,15 @@ async function fetchRoomCharacters() {
 
     chatState.roomCharacters = (data || []).map(rc => {
         const char = rc.characters || {};
+        const charId = char.id || rc.character_id;
         return {
-            id: char.id || rc.character_id,
+            id: charId,
             roomCharId: rc.id,
             name: char.name || 'Sem nome',
             avatar: char.avatar_url || null,
             color: char.color || '#9333ea',
             initials: char.initials || (char.name ? char.name.substring(0,2).toUpperCase() : '??'),
-            description: char.description || '',
+            description: chatState.characterDescriptionsCache.get(charId) || '',
             ownerId: rc.owner_id,
             ownerName: rc.owner_id === chatState.currentUser.id ? 'Você' : (rc.owner_id ? (chatState.roomUsers.get(rc.owner_id)?.name || chatState.onlineUsers.get(rc.owner_id)?.name || 'Usuário') : null),
             lastUsed: rc.last_used_at ? new Date(rc.last_used_at).getTime() : 0
@@ -1714,6 +1714,11 @@ function clearRoomTransientState() {
     hideOlderMessagesLoader();
     if (chatMessagesContainer) {
         chatMessagesContainer.replaceChildren();
+    }
+
+    if (characterAvatarObserver) {
+        characterAvatarObserver.disconnect();
+        characterAvatarObserver = null;
     }
 
     chatState.roomCharacters = [];
@@ -2383,7 +2388,7 @@ function updateMessageSenderNames() {
     });
 }
 
-function showCharacterProfile(characterId) {
+async function showCharacterProfile(characterId) {
     const character = chatState.roomCharacters.find(item => item.id === characterId);
     if (!character) return;
 
@@ -2411,8 +2416,25 @@ function showCharacterProfile(characterId) {
         : `<span style="color:${character.color}">${character.initials}</span>`;
     avatar.style.setProperty('--character-color', character.color || '#9d4edd');
     characterProfileModal.querySelector('#character-profile-name').textContent = character.name;
-    characterProfileModal.querySelector('.character-profile-description').textContent = character.description || 'Este personagem ainda não possui uma descrição.';
+
+    const descEl = characterProfileModal.querySelector('.character-profile-description');
+    const cachedDesc = chatState.characterDescriptionsCache.get(character.id) ?? character.description;
+    descEl.textContent = cachedDesc || 'Carregando descrição...';
     characterProfileModal.classList.remove('hidden');
+
+    if (!chatState.characterDescriptionsCache.has(character.id)) {
+        const { data } = await supabase
+            .from('characters')
+            .select('description')
+            .eq('id', character.id)
+            .maybeSingle();
+        const loadedDesc = data?.description || '';
+        chatState.characterDescriptionsCache.set(character.id, loadedDesc);
+        character.description = loadedDesc;
+        if (!characterProfileModal.classList.contains('hidden')) {
+            descEl.textContent = loadedDesc || 'Este personagem ainda não possui uma descrição.';
+        }
+    }
 }
 
 if (chatMessagesContainer) {
@@ -2548,13 +2570,12 @@ async function processIncomingMessage(newMsg) {
                 name: cachedChar.name,
                 avatar_url: cachedChar.avatar,
                 color: cachedChar.color,
-                initials: cachedChar.initials,
-                description: cachedChar.description
+                initials: cachedChar.initials
             };
         } else {
             const { data: charData } = await supabase
                 .from('characters')
-                .select('id, name, avatar_url, color, initials, description')
+                .select('id, name, avatar_url, color, initials')
                 .eq('id', newMsg.character_id)
                 .single();
             newMsg.characters = charData;
@@ -2586,7 +2607,7 @@ async function processIncomingMessage(newMsg) {
             avatar: charData.avatar_url,
             initials: charData.initials || charData.name.substring(0, 2).toUpperCase(),
             color: charData.color || '#9333ea',
-            description: charData.description || ''
+            description: ''
         });
     }
 
@@ -2739,7 +2760,7 @@ function subscribeToMessages() {
 }
 
 // ==========================================
-// 6. ORDENAÇÃO E RENDERIZAÇÃO DO DECK (FOTOS SOB DEMANDA / EM LOTES DE 10)
+// 6. ORDENAÇÃO E RENDERIZAÇÃO DO DECK (SLOTS COMPLETOS + FOTOS 10 EM 10 SOB DEMANDA)
 // ==========================================
 function getSortedCharacters() {
     return [...chatState.roomCharacters].sort((a, b) => {
@@ -2770,7 +2791,10 @@ function loadCharacterSlotAvatar(slot) {
     const color = slot.getAttribute('data-char-color') || '#9333ea';
 
     if (!url) {
-        slot.outerHTML = `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#1a1b26;color:${color};font-weight:bold;">${initials}</div>`;
+        const fallback = document.createElement('div');
+        fallback.style.cssText = `width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#1a1b26;color:${color};font-weight:bold;`;
+        fallback.textContent = initials;
+        slot.replaceWith(fallback);
         return;
     }
 
@@ -2809,41 +2833,52 @@ function hydrateCharacterAvatarBatch(pageIndex) {
     });
 }
 
-function hydrateVisibleCharacterAvatars() {
-    if (!characterList) return;
+function setupDesktopCharacterAvatarObserver() {
+    if (characterAvatarObserver) {
+        characterAvatarObserver.disconnect();
+        characterAvatarObserver = null;
+    }
+    if (!characterList || window.matchMedia('(max-width: 700px)').matches) return;
 
-    const isMobile = window.matchMedia('(max-width: 700px)').matches;
-    if (isMobile) {
-        hydrateCharacterAvatarBatch(activeCharacterPage);
+    const rootEl = characterListViewport || characterList;
+    if (typeof IntersectionObserver !== 'function') {
+        hydrateCharacterAvatarBatch(0);
         return;
     }
 
-    const scrollContainer = characterListViewport || characterList;
-    const containerRect = scrollContainer.getBoundingClientRect();
-    const visibleLeft = containerRect.left - 120;
-    const visibleRight = containerRect.right + 180;
+    characterAvatarObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (!entry.isIntersecting) return;
+            const slot = entry.target;
+            const batchPage = Number(slot.dataset.batchPage || 0);
+            hydrateCharacterAvatarBatch(batchPage);
+            characterAvatarObserver?.unobserve(slot);
+        });
+    }, {
+        root: rootEl,
+        rootMargin: '0px 80px 0px 0px',
+        threshold: 0.05
+    });
 
-    characterList.querySelectorAll('.char-item[data-id]').forEach((item, index) => {
-        const slot = item.querySelector('.char-avatar-slot[data-avatar-src]');
-        if (!slot) return;
-
-        const rect = item.getBoundingClientRect();
-        const isInViewport = rect.width > 0 && rect.right >= visibleLeft && rect.left <= visibleRight;
-        if (isInViewport) {
-            chatState.unlockedCharacterPages.add(Math.floor(index / CHARACTER_AVATAR_BATCH_SIZE));
-            loadCharacterSlotAvatar(slot);
-        }
+    characterList.querySelectorAll('.char-avatar-slot[data-avatar-src]').forEach(slot => {
+        characterAvatarObserver.observe(slot);
     });
 }
 
 function renderDeck() {
     if (!characterList) return;
 
+    if (characterAvatarObserver) {
+        characterAvatarObserver.disconnect();
+        characterAvatarObserver = null;
+    }
+
     characterList.innerHTML = '';
     const sortedCharacters = getSortedCharacters();
     const pageCount = Math.max(1, Math.ceil(sortedCharacters.length / CHARACTER_AVATAR_BATCH_SIZE));
     activeCharacterPage = Math.min(activeCharacterPage, pageCount - 1);
     chatState.unlockedCharacterPages.add(activeCharacterPage);
+    const isMobile = window.matchMedia('(max-width: 700px)').matches;
 
     const characterItems = sortedCharacters.map((char, index) => {
         const batchPage = Math.floor(index / CHARACTER_AVATAR_BATCH_SIZE);
@@ -2863,7 +2898,6 @@ function renderDeck() {
         let stateClass = 'free';
         let badgeHTML = `<span class="status-badge free-icon">${ICONS.unlock}</span>`;
         let tooltipText = 'Personagem Solto - Clique para assumir';
-        
         let wrapperStyle = !char.avatar ? `border-color: ${char.color};` : '';
 
         if (isActive) {
@@ -2887,19 +2921,19 @@ function renderDeck() {
 
         let avatarImgOrInitials;
         if (char.avatar && isAlreadyCached) {
-            avatarImgOrInitials = `<img src="${char.avatar}" alt="${escapeHtml(char.name)}" decoding="async">`;
+            avatarImgOrInitials = `<img src="${escapeHtml(char.avatar)}" alt="${escapeHtml(char.name)}" decoding="async">`;
         } else if (char.avatar) {
-            avatarImgOrInitials = `<div class="char-avatar-slot" data-avatar-src="${escapeHtml(char.avatar)}" data-char-name="${escapeHtml(char.name)}" data-char-initials="${escapeHtml(char.initials)}" data-char-color="${escapeHtml(char.color)}" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#1a1b26;color:${char.color};">${ICONS.spinner}</div>`;
+            avatarImgOrInitials = `<div class="char-avatar-slot" data-batch-page="${batchPage}" data-avatar-src="${escapeHtml(char.avatar)}" data-char-name="${escapeHtml(char.name)}" data-char-initials="${escapeHtml(char.initials)}" data-char-color="${escapeHtml(char.color)}" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#1a1b26;color:${char.color};font-weight:bold;">${escapeHtml(char.initials)}</div>`;
         } else {
-            avatarImgOrInitials = `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #1a1b26; color: ${char.color}; font-weight: bold;">${char.initials}</div>`;
+            avatarImgOrInitials = `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #1a1b26; color: ${char.color}; font-weight: bold;">${escapeHtml(char.initials)}</div>`;
         }
 
         charItem.innerHTML = `
-            <div class="char-avatar-wrapper" title="${tooltipText}" style="${wrapperStyle}">
+            <div class="char-avatar-wrapper" title="${escapeHtml(tooltipText)}" style="${wrapperStyle}">
                 ${avatarImgOrInitials}
                 ${badgeHTML}
             </div>
-            <span>${char.name.split(' ')[0]}</span>
+            <span>${escapeHtml(char.name.split(' ')[0])}</span>
         `;
 
         if (shouldLoadAvatarNow && !isAlreadyCached) {
@@ -2950,15 +2984,18 @@ function renderDeck() {
 
     renderCharacterPageIndicators(pageCount);
     updateCharacterPagePosition();
-    requestAnimationFrame(hydrateVisibleCharacterAvatars);
+    if (!isMobile) {
+        setupDesktopCharacterAvatarObserver();
+    }
 }
 
 function updateCharacterPagePosition() {
     if (!characterList) return;
     const isMobile = window.matchMedia('(max-width: 700px)').matches;
     characterList.style.transform = isMobile ? `translateX(-${activeCharacterPage * 100}%)` : '';
-    hydrateCharacterAvatarBatch(activeCharacterPage);
-    requestAnimationFrame(hydrateVisibleCharacterAvatars);
+    if (isMobile) {
+        hydrateCharacterAvatarBatch(activeCharacterPage);
+    }
 
     characterPageIndicators?.querySelectorAll('.character-page-dot').forEach((dot, index) => {
         dot.setAttribute('aria-current', String(index === activeCharacterPage));
@@ -3003,16 +3040,24 @@ if (characterListViewport) {
     });
 
     characterListViewport.addEventListener('pointercancel', () => { characterSwipeStartX = null; });
-    characterListViewport.addEventListener('scroll', hydrateVisibleCharacterAvatars, { passive: true });
-}
 
-if (characterList) {
-    characterList.addEventListener('scroll', hydrateVisibleCharacterAvatars, { passive: true });
+    // Permite rolar a lista horizontalmente com a rodinha do mouse no desktop
+    characterListViewport.addEventListener('wheel', event => {
+        if (window.matchMedia('(max-width: 700px)').matches) return;
+        const scrollTarget = characterListViewport.scrollWidth > characterListViewport.clientWidth
+            ? characterListViewport
+            : characterList;
+        if (!scrollTarget || scrollTarget.scrollWidth <= scrollTarget.clientWidth) return;
+        if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+            event.preventDefault();
+            scrollTarget.scrollLeft += event.deltaY;
+        }
+    }, { passive: false });
 }
 
 window.addEventListener('resize', () => {
     updateCharacterPagePosition();
-    hydrateVisibleCharacterAvatars();
+    setupDesktopCharacterAvatarObserver();
 });
 
 function setActiveCharacter(charId) {
@@ -3461,8 +3506,7 @@ async function sendMessage() {
             name: activeChar.name,
             avatar_url: activeChar.avatar,
             color: activeChar.color,
-            initials: activeChar.initials,
-            description: activeChar.description
+            initials: activeChar.initials
         }
         : null;
     const message = { ...insertedMessage, characters: character };
