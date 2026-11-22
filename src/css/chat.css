@@ -384,6 +384,37 @@
     background-position: center;
 }
 
+/* Barra separadora "Não lida" acima das mensagens não lidas */
+.chat-unread-divider {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    margin: 0.35rem 0;
+    color: #c084fc;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    user-select: none;
+}
+
+.chat-unread-divider::before,
+.chat-unread-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(157, 78, 221, 0.12), rgba(157, 78, 221, 0.7), rgba(157, 78, 221, 0.12));
+}
+
+.chat-unread-divider span {
+    padding: 0.25rem 0.85rem;
+    border-radius: 999px;
+    background: rgba(157, 78, 221, 0.16);
+    border: 1px solid rgba(157, 78, 221, 0.5);
+    box-shadow: 0 0 12px rgba(157, 78, 221, 0.22);
+}
+
 .message {
     display: flex;
     gap: 0.8rem;
@@ -536,6 +567,7 @@
     background: #111216;
     display: flex;
     justify-content: center;
+    position: relative;
 }
 
 .input-wrapper {
@@ -601,8 +633,6 @@
 }
 
 .typing-indicator.hidden { display: none; }
-
-.chat-footer { position: relative; }
 
 .btn-send {
     width: 36px;
@@ -1069,4 +1099,3 @@
 .btn-primary-modal:hover {
     background: #7c3aed;
 }
-

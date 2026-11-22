@@ -191,6 +191,10 @@
     flex-direction: column;
 }
 
+.room-card.has-unread {
+    border-color: rgba(157, 78, 221, 0.55);
+}
+
 .room-card:hover {
     transform: translateY(-4px);
     border-color: rgba(157, 78, 221, 0.4);
@@ -202,6 +206,28 @@
     position: relative;
     width: 100%;
     height: 180px;
+}
+
+.room-unread-badge {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 2;
+    min-width: 26px;
+    height: 26px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: #9333ea;
+    color: #ffffff;
+    border: 2px solid #13141a;
+    box-shadow: 0 4px 12px rgba(147, 51, 234, 0.55);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1;
+    pointer-events: none;
 }
 
 .room-image {

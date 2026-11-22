@@ -54,8 +54,110 @@ const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/
 let currentUser = null;
 let currentEditingRoom = null;
 let requestSubscription = null;
+let unreadMessagesSubscription = null;
+let roomBroadcastChannels = [];
+let unreadPollTimer = null;
+let isSyncingUnread = false;
 let ownedRoomTitles = new Map();
+let cachedRooms = [];
 const pendingJoinRequests = new Map();
+const countedUnreadMessageIds = new Set();
+
+// ==========================================
+// 1.1. CONTROLE DE ÚLTIMO USO E MENSAGENS NÃO LIDAS
+// ==========================================
+function getRoomUsageStorageKey() {
+    return currentUser?.id ? `roomLastUsed_${currentUser.id}` : 'roomLastUsed';
+}
+
+function getRoomLastReadStorageKey() {
+    return currentUser?.id ? `roomLastRead_${currentUser.id}` : 'roomLastRead';
+}
+
+function getStorageMap(key) {
+    try {
+        const raw = localStorage.getItem(key);
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function getRoomLastUsedMap() {
+    return getStorageMap(getRoomUsageStorageKey());
+}
+
+function getRoomLastReadMap() {
+    return getStorageMap(getRoomLastReadStorageKey());
+}
+
+function markRoomAsUsed(roomId, timestamp = Date.now()) {
+    if (!roomId) return;
+    try {
+        const map = getRoomLastUsedMap();
+        map[String(roomId)] = Math.max(Number(map[String(roomId)] || 0), timestamp);
+        localStorage.setItem(getRoomUsageStorageKey(), JSON.stringify(map));
+    } catch (error) {
+        console.warn('Não foi possível salvar o último acesso da sala:', error);
+    }
+}
+
+function markRoomAsRead(roomId, timestamp = Date.now()) {
+    if (!roomId) return;
+    try {
+        const map = getRoomLastReadMap();
+        map[String(roomId)] = Math.max(Number(map[String(roomId)] || 0), timestamp);
+        localStorage.setItem(getRoomLastReadStorageKey(), JSON.stringify(map));
+    } catch (error) {
+        console.warn('Não foi possível salvar a leitura da sala:', error);
+    }
+}
+
+function sortRoomsByLastUsed(rooms) {
+    const usageMap = getRoomLastUsedMap();
+    const lastActiveRoomId = localStorage.getItem('lastRoomId');
+
+    return [...rooms].sort((a, b) => {
+        const aLastUsed = Number(usageMap[String(a.id)] || a.last_activity_at || 0);
+        const bLastUsed = Number(usageMap[String(b.id)] || b.last_activity_at || 0);
+
+        const aEffective = aLastUsed || (String(a.id) === String(lastActiveRoomId) ? 1 : 0);
+        const bEffective = bLastUsed || (String(b.id) === String(lastActiveRoomId) ? 1 : 0);
+
+        if (bEffective !== aEffective) {
+            return bEffective - aEffective;
+        }
+
+        return new Date(b.created_at) - new Date(a.created_at);
+    });
+}
+
+function handleIncomingUnreadMessage(rawMessage) {
+    if (!rawMessage || !currentUser) return;
+    if (rawMessage.user_id === currentUser.id) return;
+
+    const roomKey = String(rawMessage.room_id);
+    const room = cachedRooms.find(r => String(r.id) === roomKey);
+    if (!room) return;
+
+    if (rawMessage.id) {
+        const msgKey = `${roomKey}:${rawMessage.id}`;
+        if (countedUnreadMessageIds.has(msgKey)) return;
+        countedUnreadMessageIds.add(msgKey);
+    }
+
+    const readTs = Number(getRoomLastReadMap()[roomKey] || 0);
+    const msgTs = Date.parse(rawMessage.created_at) || Date.now();
+    if (msgTs <= readTs) return;
+
+    room.unread_count = Number(room.unread_count || 0) + 1;
+    room.last_activity_at = Math.max(Number(room.last_activity_at || 0), msgTs);
+    markRoomAsUsed(room.id, msgTs);
+
+    cachedRooms = sortRoomsByLastUsed(cachedRooms);
+    renderRooms(cachedRooms);
+}
 
 // ==========================================
 // 2. LÓGICA DOS MODAIS (UI / Eventos)
@@ -157,7 +259,6 @@ function renderRooms(rooms) {
 
     roomsCount.textContent = `${rooms.length} sala${rooms.length !== 1 ? 's' : ''} ativa${rooms.length !== 1 ? 's' : ''}`;
 
-    // OTIMIZAÇÃO: Usando DocumentFragment para injetar tudo de uma vez no DOM e evitar engasgos
     const fragment = document.createDocumentFragment();
 
     rooms.forEach(room => {
@@ -166,12 +267,18 @@ function renderRooms(rooms) {
             `<span class="tag tag-${tag.color || 'purple'}">• ${tag.name}</span>`
         ).join('');
 
+        const unreadCount = Number(room.unread_count || 0);
+        const unreadBadgeHTML = unreadCount > 0
+            ? `<span class="room-unread-badge" title="${unreadCount} mensage${unreadCount === 1 ? 'm' : 'ns'} não lida${unreadCount === 1 ? '' : 's'}">${unreadCount > 99 ? '99+' : unreadCount}</span>`
+            : '';
+
         const card = document.createElement('div');
-        card.className = 'room-card';
+        card.className = `room-card${unreadCount > 0 ? ' has-unread' : ''}`;
+        card.dataset.roomId = String(room.id);
         card.innerHTML = `
             <div class="room-image-wrapper">
-                <a href="chat.html?id=${room.id}">
-                    <!-- OTIMIZAÇÃO: loading="lazy" para economizar banda com imagens fora da tela -->
+                ${unreadBadgeHTML}
+                <a href="chat.html?id=${room.id}" class="room-enter-link">
                     <img src="${room.image_url || 'https://placehold.co/800x450/1a1c23/9d4edd?text=Sem+Capa'}" alt="${room.title}" class="room-image" loading="lazy">
                 </a>
                 <div class="room-host-label"></div>
@@ -179,7 +286,7 @@ function renderRooms(rooms) {
             </div>
             <div class="room-info">
                 <div class="room-text">
-                    <a href="chat.html?id=${room.id}" style="text-decoration: none; color: inherit;">
+                    <a href="chat.html?id=${room.id}" class="room-enter-link" style="text-decoration: none; color: inherit;">
                         <h3>${room.title}</h3>
                     </a>
                     <p>${room.members_count || 0} membros</p>
@@ -192,6 +299,23 @@ function renderRooms(rooms) {
 
         const hostName = room.created_by_name || 'Anfitrião';
         card.querySelector('.room-host-label').textContent = `Criada por ${hostName}`;
+
+        card.querySelectorAll('.room-enter-link').forEach(link => {
+            link.addEventListener('click', () => {
+                const roomKey = String(room.id);
+                const previousReadTs = Number(getRoomLastReadMap()[roomKey] || 0);
+                if (Number(room.unread_count || 0) > 0 && previousReadTs > 0) {
+                    sessionStorage.setItem(`chatUnreadSince_${roomKey}`, String(previousReadTs));
+                } else {
+                    sessionStorage.removeItem(`chatUnreadSince_${roomKey}`);
+                }
+
+                const now = Date.now();
+                markRoomAsUsed(room.id, now);
+                markRoomAsRead(room.id, now);
+                room.unread_count = 0;
+            });
+        });
         
         const editBtn = card.querySelector('.btn-edit-room');
         editBtn.addEventListener('click', (e) => {
@@ -226,6 +350,128 @@ async function initRooms() {
     fetchRooms();
 }
 
+async function hydrateLastActivityAndUnread(rooms) {
+    if (!rooms.length) return false;
+    const usageMap = getRoomLastUsedMap();
+    const readMap = getRoomLastReadMap();
+    let hasChanges = false;
+
+    await Promise.all(rooms.map(async room => {
+        const roomKey = String(room.id);
+        const localUsedTs = Number(usageMap[roomKey] || 0);
+        const localReadTs = Number(readMap[roomKey] || 0);
+
+        // Baseline de leitura: se o usuário nunca abriu a sala nesta máquina, usa o momento atual para não marcar histórico antigo como não lido
+        let effectiveReadTs = localReadTs || localUsedTs;
+        if (!effectiveReadTs) {
+            effectiveReadTs = Date.now();
+            markRoomAsRead(room.id, effectiveReadTs);
+        }
+
+        const sinceIso = new Date(effectiveReadTs).toISOString();
+
+        const [{ data: latestMsg }, { data: unreadRows, error: unreadError }] = await Promise.all([
+            supabase
+                .from('messages')
+                .select('created_at')
+                .eq('room_id', room.id)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle(),
+            supabase
+                .from('messages')
+                .select('id, created_at')
+                .eq('room_id', room.id)
+                .neq('user_id', currentUser.id)
+                .gt('created_at', sinceIso)
+                .limit(100)
+        ]);
+
+        const lastMsgTs = latestMsg?.created_at ? Date.parse(latestMsg.created_at) : 0;
+        const newLastActivity = Math.max(localUsedTs, Number.isFinite(lastMsgTs) ? lastMsgTs : 0);
+        if (newLastActivity !== Number(room.last_activity_at || 0)) {
+            room.last_activity_at = newLastActivity;
+            hasChanges = true;
+        }
+        if (room.last_activity_at > localUsedTs) {
+            markRoomAsUsed(room.id, room.last_activity_at);
+        }
+
+        const previousUnread = Number(room.unread_count || 0);
+        const rows = unreadError ? [] : (unreadRows || []);
+        rows.forEach(row => {
+            if (row.id) countedUnreadMessageIds.add(`${roomKey}:${row.id}`);
+        });
+
+        const nextUnread = unreadError ? previousUnread : rows.length;
+        if (nextUnread !== previousUnread) {
+            room.unread_count = nextUnread;
+            hasChanges = true;
+        }
+    }));
+
+    return hasChanges;
+}
+
+function setupUnreadMessagesListener(roomIds) {
+    if (!roomIds || roomIds.length === 0) return;
+    if (unreadMessagesSubscription) supabase.removeChannel(unreadMessagesSubscription);
+
+    roomBroadcastChannels.forEach(channel => supabase.removeChannel(channel));
+    roomBroadcastChannels = [];
+
+    const roomIdSet = new Set(roomIds.map(String));
+
+    // 1. Escuta alterações no banco (Postgres Changes)
+    unreadMessagesSubscription = supabase
+        .channel(`rooms_unread_${currentUser.id}`)
+        .on('postgres_changes', {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'messages'
+        }, payload => {
+            const newMsg = payload.new;
+            if (!newMsg || !roomIdSet.has(String(newMsg.room_id))) return;
+            handleIncomingUnreadMessage(newMsg);
+        })
+        .subscribe();
+
+    // 2. Escuta também o broadcast em tempo real enviado pelo chat.js de cada sala
+    roomIds.forEach(roomId => {
+        const channel = supabase
+            .channel(`room_${roomId}_messages`, {
+                config: { broadcast: { ack: false, self: false } }
+            })
+            .on('broadcast', { event: 'new_message' }, ({ payload }) => {
+                if (payload?.message) {
+                    handleIncomingUnreadMessage({
+                        ...payload.message,
+                        room_id: payload.message.room_id || roomId
+                    });
+                }
+            })
+            .subscribe();
+
+        roomBroadcastChannels.push(channel);
+    });
+
+    // 3. Sincronização automática periódica de segurança (sem precisar recarregar a página)
+    if (unreadPollTimer) clearInterval(unreadPollTimer);
+    unreadPollTimer = setInterval(async () => {
+        if (document.visibilityState !== 'visible' || isSyncingUnread || !cachedRooms.length) return;
+        isSyncingUnread = true;
+        try {
+            const changed = await hydrateLastActivityAndUnread(cachedRooms);
+            if (changed) {
+                cachedRooms = sortRoomsByLastUsed(cachedRooms);
+                renderRooms(cachedRooms);
+            }
+        } finally {
+            isSyncingUnread = false;
+        }
+    }, 4000);
+}
+
 async function fetchRooms() {
     try {
         // OTIMIZAÇÃO: Definindo apenas as colunas vitais para a tela de listagem/edição
@@ -258,15 +504,18 @@ async function fetchRooms() {
         // Remove duplicatas (caso ele seja criador e tenha sido inserido como membro por engano)
         const uniqueRooms = Array.from(new Map(allRooms.map(r => [r.id, r])).values());
 
-        // Ordena da mais nova para a mais antiga
-        uniqueRooms.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        // Considera a última atividade registrada e contabiliza mensagens não lidas
+        await hydrateLastActivityAndUnread(uniqueRooms);
+
+        // Ordena da última sala usada para a mais antiga
+        const sortedRooms = sortRoomsByLastUsed(uniqueRooms);
 
         // OTIMIZAÇÃO: Cache em memória para evitar o Problema N+1 (múltiplas queries para o mesmo usuário)
         const hostNameCache = new Map();
         const currentUserMetadata = currentUser.user_metadata;
         hostNameCache.set(currentUser.id, currentUserMetadata?.custom_name || currentUserMetadata?.full_name || currentUserMetadata?.name || 'Você');
 
-        await Promise.all(uniqueRooms.map(async room => {
+        await Promise.all(sortedRooms.map(async room => {
             // Se o nome do anfitrião já estiver no cache, usa ele e aborta a query repetida
             if (hostNameCache.has(room.created_by)) {
                 room.created_by_name = hostNameCache.get(room.created_by);
@@ -284,8 +533,13 @@ async function fetchRooms() {
             if (profileError) console.error(`Não foi possível carregar o nome do anfitrião da sala ${room.id}.`, profileError);
         }));
 
+        cachedRooms = sortedRooms;
+
         // Renderiza na tela
-        renderRooms(uniqueRooms);
+        renderRooms(cachedRooms);
+
+        // Escuta novas mensagens em tempo real para atualizar as bolinhas
+        setupUnreadMessagesListener(cachedRooms.map(r => r.id));
 
         // Prepara a escuta de pedidos para as salas que ELE criou
         const myOwnedRoomIds = myRooms.map(r => r.id);
@@ -299,6 +553,19 @@ async function fetchRooms() {
         loadingOverlay.classList.add('hidden');
     }
 }
+
+// Quando o usuário volta para a seção de salas (ex: saindo do chat ou alternando aba), sincroniza as bolinhas
+window.addEventListener('pageshow', () => {
+    if (cachedRooms.length > 0 && currentUser) {
+        fetchRooms();
+    }
+});
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && cachedRooms.length > 0 && currentUser) {
+        fetchRooms();
+    }
+});
 
 // --- SISTEMA DE PEDIDOS DE ENTRADA ---
 async function loadPendingJoinRequests(roomIds) {
@@ -529,9 +796,16 @@ formNewRoom.addEventListener('submit', async (e) => {
                 wallpaper_url: wallpaperUrl,
                 invite_code: inviteCode,
                 created_by: currentUser.id
-            }]);
+            }])
+            .select('id')
+            .single();
 
         if (error) throw error;
+        if (data?.id) {
+            const now = Date.now();
+            markRoomAsUsed(data.id, now);
+            markRoomAsRead(data.id, now);
+        }
         console.log("✅ Sala criada!");
 
         closeNewRoomModal();

@@ -41,6 +41,8 @@ const chatState = {
     isLoadingOlderMessages: false,
     isResettingRoomState: false,
     wasHiddenOrLeft: false,
+    unreadSinceTimestamp: null,
+    unreadDividerInserted: false,
     renderedMessageIds: new Set(),
     messageSyncTimer: null,
     messageRealtimeConnected: false,
@@ -73,6 +75,70 @@ let userWalletFolders = [];
 let activeWalletFolderId = null;
 const selectedWalletCharIds = new Set();
 const UNFILED_WALLET_FOLDER = '__unfiled__';
+
+// ==========================================
+// 2.1. MARCAÇÃO DE LEITURA E ATIVIDADE DA SALA
+// ==========================================
+function captureInitialUnreadBaseline() {
+    if (!chatState.roomId || !chatState.currentUser.id) return;
+    const roomKey = String(chatState.roomId);
+
+    // Captura o timestamp anterior salvo ao clicar no card em rooms.html (e consome uma única vez)
+    const sessionKey = `chatUnreadSince_${roomKey}`;
+    const fromSession = Number(sessionStorage.getItem(sessionKey) || 0);
+    if (fromSession > 0) {
+        sessionStorage.removeItem(sessionKey);
+        chatState.unreadSinceTimestamp = fromSession;
+        return;
+    }
+
+    // Fallback caso o usuário tenha aberto diretamente pela URL sem passar por rooms.html
+    try {
+        const readKey = `roomLastRead_${chatState.currentUser.id}`;
+        const readMap = JSON.parse(localStorage.getItem(readKey) || '{}');
+        const lastRead = Number(readMap[roomKey] || 0);
+        chatState.unreadSinceTimestamp = lastRead > 0 ? lastRead : null;
+    } catch {
+        chatState.unreadSinceTimestamp = null;
+    }
+}
+
+function removeUnreadDivider() {
+    document.getElementById('chat-unread-divider')?.remove();
+    chatState.unreadDividerInserted = false;
+    chatState.unreadSinceTimestamp = null;
+}
+
+function createUnreadDividerElement() {
+    const divider = document.createElement('div');
+    divider.id = 'chat-unread-divider';
+    divider.className = 'chat-unread-divider';
+    divider.setAttribute('role', 'separator');
+    divider.setAttribute('aria-label', 'Não lida');
+    divider.innerHTML = '<span>Não lida</span>';
+    return divider;
+}
+
+function markCurrentRoomAsViewed(timestamp = Date.now()) {
+    if (!chatState.roomId || !chatState.currentUser.id) return;
+    if (document.visibilityState === 'hidden') return;
+
+    const roomKey = String(chatState.roomId);
+    const readKey = `roomLastRead_${chatState.currentUser.id}`;
+    const usedKey = `roomLastUsed_${chatState.currentUser.id}`;
+
+    try {
+        const readMap = JSON.parse(localStorage.getItem(readKey) || '{}');
+        readMap[roomKey] = Math.max(Number(readMap[roomKey] || 0), timestamp);
+        localStorage.setItem(readKey, JSON.stringify(readMap));
+
+        const usedMap = JSON.parse(localStorage.getItem(usedKey) || '{}');
+        usedMap[roomKey] = Math.max(Number(usedMap[roomKey] || 0), timestamp);
+        localStorage.setItem(usedKey, JSON.stringify(usedMap));
+    } catch (error) {
+        console.warn('Não foi possível atualizar o status de visualização da sala:', error);
+    }
+}
 
 // ==========================================
 // 3. ELEMENTOS DO DOM
@@ -193,6 +259,8 @@ async function initChat() {
 
     if (chatState.roomId) {
         localStorage.setItem('lastRoomId', chatState.roomId);
+        captureInitialUnreadBaseline();
+        markCurrentRoomAsViewed();
         
         await loadRoomDetails();
         setupPresence(); 
@@ -838,7 +906,7 @@ function hideOlderMessagesLoader() {
 }
 
 function clearRoomTransientState() {
-    // Limpa mensagens carregadas
+    // Limpa mensagens carregadas e remove a barra "Não lida" da sessão anterior
     chatState.renderedMessageIds.clear();
     chatState.messagesById.clear();
     chatState.pendingMessageEvents.length = 0;
@@ -847,6 +915,7 @@ function clearRoomTransientState() {
     chatState.isLoadingOlderMessages = false;
     chatState.latestMessageTimestamp = 0;
     chatState.messagesLoaded = false;
+    removeUnreadDivider();
     hideOlderMessagesLoader();
     if (chatMessagesContainer) {
         chatMessagesContainer.replaceChildren();
@@ -876,6 +945,7 @@ async function resetRoomToInitialSnapshot() {
     chatState.isResettingRoomState = true;
     try {
         clearRoomTransientState();
+        markCurrentRoomAsViewed();
         await Promise.all([
             fetchRoomCharacters(),
             fetchMessages()
@@ -900,18 +970,20 @@ async function resetRoomToInitialSnapshot() {
 }
 
 function setupPageLifecycleReset() {
-    // Limpa mensagens e personagens assim que o usuário sai da página
+    // Limpa mensagens, barra "Não lida" e personagens assim que o usuário sai ou recarrega a página
     window.addEventListener('pagehide', () => {
+        markCurrentRoomAsViewed();
         chatState.wasHiddenOrLeft = true;
         clearRoomTransientState();
     });
 
     window.addEventListener('beforeunload', () => {
+        markCurrentRoomAsViewed();
         chatState.wasHiddenOrLeft = true;
         clearRoomTransientState();
     });
 
-    // Quando o usuário volta para a página (inclusive via bfcache ou troca de aba/app), recarrega apenas as 10 últimas mensagens e os personagens da sala
+    // Quando o usuário volta para a página (inclusive via bfcache ou troca de aba/app), recarrega sem a barra "Não lida"
     window.addEventListener('pageshow', event => {
         if (event.persisted || chatState.wasHiddenOrLeft) {
             chatState.wasHiddenOrLeft = false;
@@ -921,6 +993,7 @@ function setupPageLifecycleReset() {
 
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') {
+            markCurrentRoomAsViewed();
             chatState.wasHiddenOrLeft = true;
             clearRoomTransientState();
         } else if (document.visibilityState === 'visible' && chatState.wasHiddenOrLeft) {
@@ -955,6 +1028,7 @@ async function fetchMessages() {
     renderAllMessages(batch);
     batch.forEach(msg => rememberMessageTimestamp(msg.created_at));
     chatState.messagesLoaded = true;
+    markCurrentRoomAsViewed(Math.max(Date.now(), chatState.latestMessageTimestamp));
 
     const pendingEvents = chatState.pendingMessageEvents.splice(0);
     pendingEvents.forEach(msg => appendMessageToUI(msg));
@@ -1116,6 +1190,8 @@ function appendMessageToUI(msg, { container = chatMessagesContainer, skipScroll 
         chatState.renderedMessageIds.add(msgKey);
     }
     rememberMessageTimestamp(msg.created_at);
+    const msgTs = Date.parse(msg.created_at);
+    markCurrentRoomAsViewed(Math.max(Date.now(), Number.isFinite(msgTs) ? msgTs : 0));
 
     const isMine = msg.user_id === chatState.currentUser.id;
     const time = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1192,6 +1268,19 @@ function appendMessageToUI(msg, { container = chatMessagesContainer, skipScroll 
     const nextMessage = Array.from(container.children).find(element =>
         element.dataset.messageId && Number(element.dataset.createdAt || 0) > timestamp
     );
+
+    // Insere a barra "Não lida" exatamente acima da primeira mensagem não lida desta sessão
+    const isUnreadFromOther = !isMine
+        && !chatState.unreadDividerInserted
+        && Number.isFinite(chatState.unreadSinceTimestamp)
+        && chatState.unreadSinceTimestamp > 0
+        && timestamp > chatState.unreadSinceTimestamp;
+
+    if (isUnreadFromOther) {
+        chatState.unreadDividerInserted = true;
+        container.insertBefore(createUnreadDividerElement(), nextMessage || null);
+    }
+
     container.insertBefore(msgElement, nextMessage || null);
     if (!skipScroll) scrollToLatestMessage();
 }
