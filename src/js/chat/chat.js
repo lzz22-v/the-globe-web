@@ -21,7 +21,15 @@ const ICONS = {
     trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
     hand: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0v5"></path><path d="M14 10V4a2 2 0 0 0-4 0v6"></path><path d="M10 10.5V6a2 2 0 0 0-4 0v8"></path><path d="M18 8a2 2 0 0 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>`,
     user: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>`,
-    spinner: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"></circle><path d="M21 12a9 9 0 0 0-9-9"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.75s" repeatCount="indefinite"/></path></svg>`
+    spinner: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"></circle><path d="M21 12a9 9 0 0 0-9-9"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.75s" repeatCount="indefinite"/></path></svg>`,
+    playerPlay: `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>`,
+    playerPause: `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"></rect><rect x="14" y="4" width="4" height="16" rx="1"></rect></svg>`,
+    playerPlayLarge: `<svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><polygon points="7 4 21 12 7 20 7 4"></polygon></svg>`,
+    playerPauseLarge: `<svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"></rect><rect x="14" y="4" width="4" height="16" rx="1"></rect></svg>`,
+    volumeHigh: `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>`,
+    volumeMuted: `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>`,
+    fullscreenEnter: `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>`,
+    fullscreenExit: `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>`
 };
 
 // ==========================================
@@ -73,10 +81,12 @@ const chatState = {
     pendingViewerIceCandidates: [],
     pendingHostIceCandidates: new Map(), // peerId -> RTCIceCandidateInit[]
     mediaMutedForAutoplay: false,
+    playerHudTimer: null,
+    isScrubbingTimeline: false,
     roomUsers: new Map(),
-    onlineUsers: new Map(), // Rastreador de usuários conectados na sala
-    loadedAvatarUrls: new Set(), // Cache de URLs de avatares já carregados na sessão
-    unlockedCharacterPages: new Set([0]) // Páginas de 10 personagens já liberadas para carregar fotos
+    onlineUsers: new Map(),
+    loadedAvatarUrls: new Set(),
+    unlockedCharacterPages: new Set([0])
 };
 
 let userWalletCharacters = [];
@@ -156,10 +166,12 @@ const sidebarAvatar = document.getElementById('sidebar-avatar');
 
 const roomTitle = document.getElementById('room-title') || document.querySelector('.room-title');
 const roomSubtitle = document.getElementById('room-members-count') || document.querySelector('.room-subtitle');
-const roomMembersAvatars = document.getElementById('room-members-avatars') || document.querySelector('.room-avatars') || document.querySelector('.header-avatars');
+const roomMembersAvatars = document.getElementById('members-stack') || document.getElementById('room-members-avatars') || document.querySelector('.room-avatars') || document.querySelector('.header-avatars');
 
 const roomInviteCode = document.getElementById('room-invite-code');
 const btnCopyInvite = document.getElementById('btn-copy-invite');
+const inviteCopyIcon = document.getElementById('invite-copy-icon');
+const inviteCopyFeedback = document.getElementById('invite-copy-feedback');
 
 const chatBackgroundArea = document.getElementById('chat-background') || document.querySelector('.chat-area') || document.querySelector('.main-content');
 const chatMessagesContainer = document.getElementById('chat-messages') || document.querySelector('.messages-container') || document.querySelector('.chat-messages');
@@ -167,7 +179,6 @@ let characterProfileModal = null;
 let activeCharacterPage = 0;
 let characterSwipeStartX = null;
 const CHARACTER_AVATAR_BATCH_SIZE = 10;
-const MOBILE_CHARACTER_PAGE_SIZE = CHARACTER_AVATAR_BATCH_SIZE;
 
 const toggleEncenacao = document.getElementById('toggle-encenacao');
 const characterBar = document.getElementById('character-bar');
@@ -190,6 +201,21 @@ const mediaBroadcastTitle = document.getElementById('media-broadcast-title');
 const btnStopMedia = document.getElementById('btn-stop-media');
 const btnEnableMediaAudio = document.getElementById('btn-enable-media-audio');
 const mediaAutoplayNotice = document.getElementById('media-autoplay-notice');
+
+// Elementos do Player Customizado theGlobe
+const globePlayerCenterTrigger = document.getElementById('globe-player-center-trigger');
+const globePlayerCenterIcon = document.getElementById('globe-player-center-icon');
+const globeBtnPlayPause = document.getElementById('globe-btn-play-pause');
+const globeBtnRewind = document.getElementById('globe-btn-rewind');
+const globeBtnForward = document.getElementById('globe-btn-forward');
+const globeBtnMute = document.getElementById('globe-btn-mute');
+const globeVolumeSlider = document.getElementById('globe-volume-slider');
+const globeBtnFullscreen = document.getElementById('globe-btn-fullscreen');
+const globePlayerScrubber = document.getElementById('globe-player-scrubber');
+const globePlayerFill = document.getElementById('globe-player-fill');
+const globePlayerBuffer = document.getElementById('globe-player-buffer');
+const globePlayerCurrentTime = document.getElementById('globe-player-current-time');
+const globePlayerDuration = document.getElementById('globe-player-duration');
 
 const inputAvatar = document.getElementById('input-avatar');
 const inputRoleLabel = document.getElementById('input-role-label');
@@ -337,7 +363,6 @@ function setupPresence() {
                 });
             }
 
-            // Encerra conexões WebRTC de espectadores que saíram da sala
             if (chatState.isHost) {
                 for (const peerId of chatState.hostPeerConnections.keys()) {
                     if (!uniqueUsers.has(peerId)) {
@@ -381,17 +406,17 @@ function updatePresenceUI() {
         displayUsers.forEach((user, index) => {
             const avatarEl = document.createElement('div');
             
-            avatarEl.style.width = '32px';
-            avatarEl.style.height = '32px';
+            avatarEl.style.width = '28px';
+            avatarEl.style.height = '28px';
             avatarEl.style.borderRadius = '50%';
             avatarEl.style.border = '2px solid #13141a';
-            avatarEl.style.marginLeft = index > 0 ? '-10px' : '0';
+            avatarEl.style.marginLeft = index > 0 ? '-8px' : '0';
             avatarEl.style.display = 'inline-flex';
             avatarEl.style.alignItems = 'center';
             avatarEl.style.justifyContent = 'center';
             avatarEl.style.backgroundColor = '#9333ea';
             avatarEl.style.color = '#fff';
-            avatarEl.style.fontSize = '12px';
+            avatarEl.style.fontSize = '11px';
             avatarEl.style.fontWeight = 'bold';
             avatarEl.style.overflow = 'hidden';
             avatarEl.style.zIndex = 10 - index;
@@ -408,17 +433,17 @@ function updatePresenceUI() {
 
         if (extraCount > 0) {
             const extraEl = document.createElement('div');
-            extraEl.style.width = '32px';
-            extraEl.style.height = '32px';
+            extraEl.style.width = '28px';
+            extraEl.style.height = '28px';
             extraEl.style.borderRadius = '50%';
             extraEl.style.border = '2px solid #13141a';
-            extraEl.style.marginLeft = '-10px';
+            extraEl.style.marginLeft = '-8px';
             extraEl.style.display = 'inline-flex';
             extraEl.style.alignItems = 'center';
             extraEl.style.justifyContent = 'center';
             extraEl.style.backgroundColor = '#2f334d';
             extraEl.style.color = 'white';
-            extraEl.style.fontSize = '11px';
+            extraEl.style.fontSize = '10px';
             extraEl.style.fontWeight = 'bold';
             extraEl.style.zIndex = 0;
             extraEl.textContent = `+${extraCount}`;
@@ -441,6 +466,7 @@ async function loadRoomDetails() {
         chatState.hostUserId = room.created_by;
         chatState.isHost = room.created_by === chatState.currentUser.id;
         if (hostMediaControls) hostMediaControls.classList.toggle('hidden', !chatState.isHost);
+        if (mediaControlsToggle) mediaControlsToggle.classList.toggle('hidden', !chatState.isHost);
         if (chatState.isHost) renderLocalMediaLibrary();
         if (roomTitle) roomTitle.textContent = room.title;
         
@@ -449,14 +475,16 @@ async function loadRoomDetails() {
         }
 
         if (btnCopyInvite && room.invite_code) {
-            btnCopyInvite.addEventListener('click', () => {
-                navigator.clipboard.writeText(room.invite_code).then(() => {
-                    const originalIcon = btnCopyInvite.innerHTML;
-                    btnCopyInvite.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+            btnCopyInvite.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(room.invite_code);
+                    if (inviteCopyIcon) inviteCopyIcon.classList.add('hidden');
+                    if (inviteCopyFeedback) inviteCopyFeedback.classList.remove('hidden');
                     setTimeout(() => {
-                        btnCopyInvite.innerHTML = originalIcon;
-                    }, 2000);
-                });
+                        if (inviteCopyFeedback) inviteCopyFeedback.classList.add('hidden');
+                        if (inviteCopyIcon) inviteCopyIcon.classList.remove('hidden');
+                    }, 1800);
+                } catch {}
             });
         }
         
@@ -491,8 +519,194 @@ async function loadRoomUserProfiles() {
 }
 
 // ==========================================
-// 4.3 TRANSMISSÃO TEMPORÁRIA DE VÍDEO LOCAL (WEBRTC P2P + SUPABASE REALTIME)
+// 4.3 TRANSMISSÃO TEMPORÁRIA DE VÍDEO LOCAL (PLAYER THEGLOBE + WEBRTC P2P)
 // ==========================================
+function formatMediaTime(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return '00:00';
+    const totalSecs = Math.floor(seconds);
+    const hrs = Math.floor(totalSecs / 3600);
+    const mins = Math.floor((totalSecs % 3600) / 60);
+    const secs = totalSecs % 60;
+    if (hrs > 0) {
+        return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function revealGlobePlayerHud() {
+    if (!mediaBroadcast || mediaBroadcast.classList.contains('hidden')) return;
+    mediaBroadcast.classList.add('hud-visible');
+    clearTimeout(chatState.playerHudTimer);
+    if (mediaBroadcastVideo && !mediaBroadcastVideo.paused) {
+        chatState.playerHudTimer = setTimeout(() => {
+            mediaBroadcast.classList.remove('hud-visible');
+        }, 2800);
+    }
+}
+
+function syncGlobePlayerControlsUI() {
+    if (!mediaBroadcastVideo || !mediaBroadcast) return;
+
+    const isPaused = mediaBroadcastVideo.paused;
+    mediaBroadcast.classList.toggle('is-paused', isPaused);
+    mediaBroadcast.classList.toggle('is-viewer', !chatState.isHost);
+
+    if (globeBtnPlayPause) {
+        globeBtnPlayPause.innerHTML = isPaused ? ICONS.playerPlay : ICONS.playerPause;
+        globeBtnPlayPause.setAttribute('aria-label', isPaused ? 'Reproduzir' : 'Pausar');
+    }
+    if (globePlayerCenterIcon) {
+        globePlayerCenterIcon.innerHTML = isPaused ? ICONS.playerPlayLarge : ICONS.playerPauseLarge;
+    }
+
+    const isMuted = mediaBroadcastVideo.muted || mediaBroadcastVideo.volume === 0;
+    if (globeBtnMute) {
+        globeBtnMute.innerHTML = isMuted ? ICONS.volumeMuted : ICONS.volumeHigh;
+    }
+    if (globeVolumeSlider) {
+        globeVolumeSlider.value = isMuted ? '0' : String(mediaBroadcastVideo.volume);
+    }
+
+    const duration = mediaBroadcastVideo.duration;
+    const current = mediaBroadcastVideo.currentTime || 0;
+    if (globePlayerCurrentTime) globePlayerCurrentTime.textContent = formatMediaTime(current);
+    if (globePlayerDuration) {
+        globePlayerDuration.textContent = Number.isFinite(duration) && duration > 0 ? formatMediaTime(duration) : 'AO VIVO';
+    }
+
+    if (!chatState.isScrubbingTimeline && globePlayerFill) {
+        const pct = Number.isFinite(duration) && duration > 0 ? Math.min(100, Math.max(0, (current / duration) * 100)) : 100;
+        globePlayerFill.style.width = `${pct}%`;
+        globePlayerScrubber?.setAttribute('aria-valuenow', String(Math.round(pct)));
+    }
+
+    if (globePlayerBuffer && Number.isFinite(duration) && duration > 0 && mediaBroadcastVideo.buffered?.length) {
+        const bufferedEnd = mediaBroadcastVideo.buffered.end(mediaBroadcastVideo.buffered.length - 1);
+        const bufPct = Math.min(100, Math.max(0, (bufferedEnd / duration) * 100));
+        globePlayerBuffer.style.width = `${bufPct}%`;
+    }
+
+    if (globeBtnFullscreen) {
+        const isFs = document.fullscreenElement === mediaBroadcast;
+        globeBtnFullscreen.innerHTML = isFs ? ICONS.fullscreenExit : ICONS.fullscreenEnter;
+    }
+
+    if (isPaused) {
+        mediaBroadcast.classList.add('hud-visible');
+        clearTimeout(chatState.playerHudTimer);
+    }
+}
+
+function scrubGlobePlayerToClientX(clientX) {
+    if (!chatState.isHost || !globePlayerScrubber || !mediaBroadcastVideo) return;
+    const duration = mediaBroadcastVideo.duration;
+    if (!Number.isFinite(duration) || duration <= 0) return;
+
+    const rect = globePlayerScrubber.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    mediaBroadcastVideo.currentTime = ratio * duration;
+    if (globePlayerFill) globePlayerFill.style.width = `${ratio * 100}%`;
+    syncGlobePlayerControlsUI();
+}
+
+function setupGlobePlayerInteractions() {
+    if (!mediaBroadcast || !mediaBroadcastVideo) return;
+
+    mediaBroadcastVideo.controls = false;
+    mediaBroadcastVideo.disablePictureInPicture = true;
+
+    ['mousemove', 'pointerdown', 'touchstart'].forEach(evt => {
+        mediaBroadcast.addEventListener(evt, revealGlobePlayerHud, { passive: true });
+    });
+
+    const toggleHostPlayPause = () => {
+        if (!chatState.isHost) {
+            revealGlobePlayerHud();
+            return;
+        }
+        if (mediaBroadcastVideo.paused) {
+            mediaBroadcastVideo.play().catch(() => {});
+        } else {
+            mediaBroadcastVideo.pause();
+        }
+        syncGlobePlayerControlsUI();
+        revealGlobePlayerHud();
+    };
+
+    globePlayerCenterTrigger?.addEventListener('click', toggleHostPlayPause);
+    globeBtnPlayPause?.addEventListener('click', toggleHostPlayPause);
+
+    globeBtnRewind?.addEventListener('click', () => {
+        if (!chatState.isHost) return;
+        mediaBroadcastVideo.currentTime = Math.max(0, (mediaBroadcastVideo.currentTime || 0) - 10);
+        syncGlobePlayerControlsUI();
+        revealGlobePlayerHud();
+    });
+
+    globeBtnForward?.addEventListener('click', () => {
+        if (!chatState.isHost) return;
+        const maxTime = Number.isFinite(mediaBroadcastVideo.duration) ? mediaBroadcastVideo.duration : Infinity;
+        mediaBroadcastVideo.currentTime = Math.min(maxTime, (mediaBroadcastVideo.currentTime || 0) + 10);
+        syncGlobePlayerControlsUI();
+        revealGlobePlayerHud();
+    });
+
+    globeBtnMute?.addEventListener('click', () => {
+        mediaBroadcastVideo.muted = !mediaBroadcastVideo.muted;
+        if (!mediaBroadcastVideo.muted && mediaBroadcastVideo.volume === 0) {
+            mediaBroadcastVideo.volume = 0.8;
+        }
+        syncGlobePlayerControlsUI();
+        revealGlobePlayerHud();
+    });
+
+    globeVolumeSlider?.addEventListener('input', () => {
+        const val = Number(globeVolumeSlider.value);
+        mediaBroadcastVideo.volume = val;
+        mediaBroadcastVideo.muted = val === 0;
+        syncGlobePlayerControlsUI();
+        revealGlobePlayerHud();
+    });
+
+    globeBtnFullscreen?.addEventListener('click', () => {
+        if (document.fullscreenElement === mediaBroadcast) {
+            document.exitFullscreen().catch(() => {});
+        } else if (mediaBroadcast.requestFullscreen) {
+            mediaBroadcast.requestFullscreen().catch(() => {});
+        }
+        revealGlobePlayerHud();
+    });
+
+    document.addEventListener('fullscreenchange', syncGlobePlayerControlsUI);
+
+    if (globePlayerScrubber) {
+        globePlayerScrubber.addEventListener('pointerdown', (e) => {
+            if (!chatState.isHost) return;
+            chatState.isScrubbingTimeline = true;
+            globePlayerScrubber.setPointerCapture?.(e.pointerId);
+            scrubGlobePlayerToClientX(e.clientX);
+        });
+
+        globePlayerScrubber.addEventListener('pointermove', (e) => {
+            if (!chatState.isScrubbingTimeline) return;
+            scrubGlobePlayerToClientX(e.clientX);
+        });
+
+        const stopScrubbing = () => {
+            if (!chatState.isScrubbingTimeline) return;
+            chatState.isScrubbingTimeline = false;
+            syncGlobePlayerControlsUI();
+        };
+
+        globePlayerScrubber.addEventListener('pointerup', stopScrubbing);
+        globePlayerScrubber.addEventListener('pointercancel', stopScrubbing);
+    }
+
+    ['play', 'pause', 'timeupdate', 'durationchange', 'progress', 'volumechange'].forEach(evt => {
+        mediaBroadcastVideo.addEventListener(evt, syncGlobePlayerControlsUI);
+    });
+}
+
 function renderLocalMediaLibrary() {
     if (!chatState.isHost || !mediaLibrary) return;
     const previous = mediaLibrary.value;
@@ -673,7 +887,13 @@ async function handleViewerOffer(payload) {
         btnEnableMediaAudio?.classList.add('hidden');
         mediaAutoplayNotice?.classList.add('hidden');
 
-        mediaBroadcastVideo.play().catch(() => {
+        syncGlobePlayerControlsUI();
+        revealGlobePlayerHud();
+
+        mediaBroadcastVideo.play().then(() => {
+            syncGlobePlayerControlsUI();
+            revealGlobePlayerHud();
+        }).catch(() => {
             showAutoplayFallback();
         });
     };
@@ -797,7 +1017,6 @@ function setupMediaBroadcast() {
                 if (chatState.isHost && chatState.activeMedia) {
                     sendMediaSignal('webrtc_live', { title: chatState.activeMedia.name });
                 } else if (!chatState.isHost && chatState.hostUserId) {
-                    // Solicita a transmissão caso o anfitrião já esteja ao vivo ao entrar
                     sendMediaSignal('webrtc_join', { to_id: chatState.hostUserId });
                 }
             }
@@ -815,6 +1034,8 @@ function showAutoplayFallback() {
     if (mediaBroadcastVideo) mediaBroadcastVideo.muted = true;
     btnEnableMediaAudio?.classList.remove('hidden');
     mediaAutoplayNotice?.classList.remove('hidden');
+    syncGlobePlayerControlsUI();
+    revealGlobePlayerHud();
     mediaBroadcastVideo?.play().catch(() => {});
 }
 
@@ -828,7 +1049,6 @@ async function startMediaBroadcast() {
     const asset = chatState.mediaAssets.find(item => item.id === mediaLibrary?.value);
     if (!asset) return;
 
-    // Encerra transmissão anterior se houver
     if (chatState.activeMedia) {
         closeAllHostPeerConnections();
         if (chatState.localMediaStream) {
@@ -840,7 +1060,7 @@ async function startMediaBroadcast() {
     chatState.activeMedia = asset;
     mediaBroadcastVideo.srcObject = null;
     mediaBroadcastVideo.src = asset.url;
-    mediaBroadcastVideo.controls = true;
+    mediaBroadcastVideo.controls = false;
     mediaBroadcastVideo.muted = false;
     mediaBroadcastTitle.textContent = asset.name;
     mediaBroadcast.classList.remove('hidden');
@@ -857,6 +1077,9 @@ async function startMediaBroadcast() {
         return;
     }
 
+    syncGlobePlayerControlsUI();
+    revealGlobePlayerHud();
+
     const stream = captureLocalVideoStream(mediaBroadcastVideo);
     if (!stream) {
         alert('Este navegador não suporta captura direta de stream de vídeo.');
@@ -866,7 +1089,6 @@ async function startMediaBroadcast() {
 
     chatState.localMediaStream = stream;
 
-    // Conecta imediatamente com todos os membros online na sala e avisa no canal
     for (const userId of chatState.onlineUsers.keys()) {
         if (userId !== chatState.currentUser.id) {
             createOfferForViewer(userId);
@@ -884,6 +1106,7 @@ async function closeMediaBroadcast(notify = false) {
         await sendMediaSignal('webrtc_stop', {});
     }
 
+    clearTimeout(chatState.playerHudTimer);
     chatState.activeMedia = null;
     closeAllHostPeerConnections();
     closeViewerPeerConnection();
@@ -908,6 +1131,8 @@ async function closeMediaBroadcast(notify = false) {
         document.exitFullscreen().catch(() => {});
     }
 }
+
+setupGlobePlayerInteractions();
 
 if (btnAddMedia) btnAddMedia.addEventListener('click', () => chatState.isHost && mediaFileInput?.click());
 if (mediaFileInput) mediaFileInput.addEventListener('change', () => {
@@ -942,6 +1167,7 @@ if (btnEnableMediaAudio) btnEnableMediaAudio.addEventListener('click', async () 
     mediaBroadcastVideo.muted = false;
     btnEnableMediaAudio.classList.add('hidden');
     mediaAutoplayNotice?.classList.add('hidden');
+    syncGlobePlayerControlsUI();
     try { await mediaBroadcastVideo.play(); } catch (_) { showAutoplayFallback(); }
 });
 if (mediaBroadcastVideo) {
@@ -2249,7 +2475,7 @@ function renderModalCharacterGrid() {
 
     const fragment = document.createDocumentFragment();
 
-    const addFolderCard = (folderId, name, count, isUnfiled = false) => {
+    const addFolderCard = (folderId, name, count) => {
         const card = document.createElement('button');
         card.type = 'button';
         card.className = 'room-wallet-folder-card';
@@ -2273,7 +2499,7 @@ function renderModalCharacterGrid() {
             addFolderCard(folder.id, folder.name, count);
         });
         const unfiledCount = userWalletCharacters.filter(char => !char.folderId).length;
-        if (unfiledCount) addFolderCard(UNFILED_WALLET_FOLDER, 'Sem pasta', unfiledCount, true);
+        if (unfiledCount) addFolderCard(UNFILED_WALLET_FOLDER, 'Sem pasta', unfiledCount);
 
         if (!userWalletFolders.length && !unfiledCount) {
             const empty = document.createElement('p');

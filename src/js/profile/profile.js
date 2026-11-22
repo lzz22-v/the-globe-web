@@ -165,7 +165,8 @@ async function initProfile() {
         return;
     }
 
-    const hasOAuthCallback = searchParams.has('code') || hashParams.has('access_token');
+    const authCode = searchParams.get('code');
+    const hasImplicitToken = hashParams.has('access_token');
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
         if (session && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED')) {
@@ -174,16 +175,36 @@ async function initProfile() {
         }
     });
 
-    const { data: { session }, error } = await supabase.auth.getSession();
-
+    // 1. Verifica se a sessão já foi estabelecida automaticamente pelo cliente
+    const { data: { session } } = await supabase.auth.getSession();
     if (session) {
         subscription.unsubscribe();
         renderProfile(session);
         return;
     }
 
-    if (hasOAuthCallback && !error) {
-        // Aguarda a troca do código PKCE pelo token antes de redirecionar para o login
+    // 2. Se voltou do Google com ?code= (PKCE) e ainda não trocou, força a troca agora
+    if (authCode) {
+        const { data: exchanged, error: exchangeError } = await supabase.auth.exchangeCodeForSession(authCode);
+        if (exchanged?.session) {
+            subscription.unsubscribe();
+            renderProfile(exchanged.session);
+            return;
+        }
+        // Se o cliente já havia consumido o code em paralelo, reconsulta getSession()
+        const { data: { session: postExchangeSession } } = await supabase.auth.getSession();
+        if (postExchangeSession) {
+            subscription.unsubscribe();
+            renderProfile(postExchangeSession);
+            return;
+        }
+        if (exchangeError) {
+            console.error('Erro ao validar código OAuth:', exchangeError.message);
+        }
+    }
+
+    // 3. Caso venha via hash (#access_token=), aguarda a leitura do fragmento
+    if (hasImplicitToken) {
         setTimeout(async () => {
             if (profileRendered) return;
             const { data: { session: lateSession } } = await supabase.auth.getSession();
@@ -193,12 +214,14 @@ async function initProfile() {
             } else {
                 window.location.replace('index.html');
             }
-        }, 4000);
+        }, 3000);
         return;
     }
 
     subscription.unsubscribe();
-    window.location.replace('index.html');
+    if (!profileRendered) {
+        window.location.replace('index.html');
+    }
 }
 
 // ==========================================

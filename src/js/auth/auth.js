@@ -81,9 +81,8 @@ function setLoading(button, isLoading) {
     button.style.opacity = isLoading ? '0.7' : '';
 }
 
-// Funciona tanto no site publicado quanto em testes locais.
-// Lembre de incluir cada origem em additional_redirect_urls no config.toml
-const PROFILE_URL = `${window.location.origin}/profile.html`;
+// Resolve corretamente tanto na raiz quanto em subpastas (ex: GitHub Pages)
+const PROFILE_URL = new URL('profile.html', window.location.href).href;
 
 // =========================================
 // LÓGICA DE AUTENTICAÇÃO (SUPABASE)
@@ -166,6 +165,9 @@ async function handleEmailLogin(e) {
 
 // 3. Autenticação via Google (Serve tanto para Login quanto para Cadastro)
 async function handleGoogleAuth() {
+    setLoading(btnGoogleRegister, true);
+    setLoading(btnGoogleLogin, true);
+
     try {
         const { error } = await supabase.auth.signInWithOAuth({
             provider: 'google',
@@ -183,6 +185,8 @@ async function handleGoogleAuth() {
     } catch (error) {
         console.error("Erro na autenticação com Google:", error.message);
         alert("Não foi possível conectar com o Google.");
+        setLoading(btnGoogleRegister, false);
+        setLoading(btnGoogleLogin, false);
     }
 }
 
@@ -205,7 +209,13 @@ btnGoogleLogin.addEventListener('click', handleGoogleAuth);
 // Inicializa os botões de olho
 initPasswordToggle();
 
-// Quem já está logado vai direto para o perfil
+// Quem já está logado (ou acabou de concluir o callback OAuth) vai direto para o perfil
 supabase.auth.getSession().then(({ data }) => {
     if (data.session) window.location.replace('profile.html');
+});
+
+supabase.auth.onAuthStateChange((event, session) => {
+    if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session) {
+        window.location.replace('profile.html');
+    }
 });
