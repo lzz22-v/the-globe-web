@@ -86,7 +86,13 @@ const chatState = {
     roomUsers: new Map(),
     onlineUsers: new Map(),
     loadedAvatarUrls: new Set(),
-    unlockedCharacterPages: new Set([0])
+    unlockedCharacterPages: new Set([0]),
+    mentionMenuOpen: false,
+    mentionTriggerStart: -1,
+    mentionQuery: '',
+    mentionFilteredCharacters: [],
+    mentionSelectedIndex: 0,
+    mentionHighlightTimer: null
 };
 
 let userWalletCharacters = [];
@@ -217,6 +223,7 @@ const globePlayerBuffer = document.getElementById('globe-player-buffer');
 const globePlayerCurrentTime = document.getElementById('globe-player-current-time');
 const globePlayerDuration = document.getElementById('globe-player-duration');
 
+const mentionDropdown = document.getElementById('mention-dropdown');
 const inputAvatar = document.getElementById('input-avatar');
 const inputRoleLabel = document.getElementById('input-role-label');
 const chatInput = document.getElementById('chat-input');
@@ -315,6 +322,7 @@ async function initChat() {
             }
         });
 
+        refreshMessageMentionsInDOM();
         chatState.activeCharacterId = null;
 
         startMessageSyncLoop();
@@ -1247,6 +1255,8 @@ async function syncRoomCharacters() {
 
     renderDeck();
     updateInputUI();
+    refreshMessageMentionsInDOM();
+    if (chatState.mentionMenuOpen) updateMentionAutocomplete();
     if (modalAddRoomChar && !modalAddRoomChar.classList.contains('hidden')) renderModalCharacterGrid();
 }
 
@@ -1397,6 +1407,7 @@ function clearRoomTransientState() {
     chatState.isLoadingOlderMessages = false;
     chatState.latestMessageTimestamp = 0;
     chatState.messagesLoaded = false;
+    closeMentionDropdown();
     removeUnreadDivider();
     hideOlderMessagesLoader();
     if (chatMessagesContainer) {
@@ -1439,6 +1450,7 @@ async function resetRoomToInitialSnapshot() {
             }
         });
 
+        refreshMessageMentionsInDOM();
         chatState.activeCharacterId = null;
 
         renderDeck();
@@ -1658,6 +1670,283 @@ function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 }
 
+function normalizeMentionSearchText(value) {
+    return String(value ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+}
+
+function escapeRegExp(value) {
+    return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function formatMessageContentWithMentions(rawContent) {
+    const text = String(rawContent ?? '');
+    if (!text) return '';
+
+    const charactersWithNames = [...chatState.roomCharacters]
+        .filter(char => char?.id && char?.name && char.name.trim())
+        .sort((a, b) => b.name.trim().length - a.name.trim().length);
+
+    if (!charactersWithNames.length) {
+        return escapeHtml(text);
+    }
+
+    const nameLookup = new Map();
+    const patterns = [];
+
+    charactersWithNames.forEach(char => {
+        const trimmedName = char.name.trim();
+        const key = trimmedName.toLowerCase();
+        if (!nameLookup.has(key)) {
+            nameLookup.set(key, char);
+            patterns.push(escapeRegExp(trimmedName));
+        }
+    });
+
+    if (!patterns.length) return escapeHtml(text);
+
+    const mentionRegex = new RegExp(`(^|[\\s([{"'“‘])@(${patterns.join('|')})(?=$|[\\s.,!?;:)\\]}"'”’])`, 'gi');
+    let result = '';
+    let lastIndex = 0;
+
+    for (const match of text.matchAll(mentionRegex)) {
+        const matchIndex = match.index ?? 0;
+        const prefix = match[1] || '';
+        const matchedName = match[2] || '';
+        const matchedChar = nameLookup.get(matchedName.toLowerCase());
+
+        result += escapeHtml(text.slice(lastIndex, matchIndex + prefix.length));
+
+        if (matchedChar) {
+            result += `<span class="character-mention" data-mention-character-id="${escapeHtml(matchedChar.id)}" role="button" tabindex="0" title="Localizar ${escapeHtml(matchedChar.name)} na lista da sala">@${escapeHtml(matchedName)}</span>`;
+        } else {
+            result += escapeHtml(`@${matchedName}`);
+        }
+
+        lastIndex = matchIndex + match[0].length;
+    }
+
+    result += escapeHtml(text.slice(lastIndex));
+    return result;
+}
+
+function refreshMessageMentionsInDOM() {
+    if (!chatMessagesContainer) return;
+    chatMessagesContainer.querySelectorAll('[data-message-id]').forEach(element => {
+        const message = chatState.messagesById.get(element.dataset.messageId);
+        if (!message || message.deleted_at) return;
+        const bubble = element.querySelector('.message-bubble');
+        if (bubble) {
+            bubble.innerHTML = formatMessageContentWithMentions(message.content);
+        }
+    });
+}
+
+function focusCharacterInRoomList(characterId) {
+    if (!characterId) return;
+
+    if (!chatState.isEncenacaoEnabled) {
+        chatState.isEncenacaoEnabled = true;
+        if (toggleEncenacao) toggleEncenacao.checked = true;
+        if (characterBar) characterBar.classList.remove('hidden');
+        renderDeck();
+        updateInputUI();
+    } else if (characterBar?.classList.contains('hidden')) {
+        characterBar.classList.remove('hidden');
+    }
+
+    const sortedCharacters = getSortedCharacters();
+    const targetIndex = sortedCharacters.findIndex(char => String(char.id) === String(characterId));
+    if (targetIndex === -1) return;
+
+    const targetPage = Math.floor(targetIndex / CHARACTER_AVATAR_BATCH_SIZE);
+    const pageCount = Math.max(1, Math.ceil(sortedCharacters.length / CHARACTER_AVATAR_BATCH_SIZE));
+    const isMobile = window.matchMedia('(max-width: 700px)').matches;
+
+    if (isMobile) {
+        setActiveCharacterPage(targetPage, pageCount);
+    } else {
+        hydrateCharacterAvatarBatch(targetPage);
+    }
+
+    requestAnimationFrame(() => {
+        const targetItem = characterList?.querySelector(`.char-item[data-id="${CSS.escape(String(characterId))}"]`);
+        if (!targetItem) return;
+
+        if (!isMobile) {
+            targetItem.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+        }
+
+        characterList?.querySelectorAll('.char-item.mention-target-highlight').forEach(el => {
+            el.classList.remove('mention-target-highlight');
+        });
+        void targetItem.offsetWidth;
+        targetItem.classList.add('mention-target-highlight');
+
+        clearTimeout(chatState.mentionHighlightTimer);
+        chatState.mentionHighlightTimer = setTimeout(() => {
+            targetItem.classList.remove('mention-target-highlight');
+        }, 2400);
+    });
+}
+
+function getFilteredMentionCharacters(query) {
+    const normalizedQuery = normalizeMentionSearchText(query).trim();
+    const sorted = getSortedCharacters();
+
+    if (!normalizedQuery) return sorted;
+
+    const startsWithMatches = [];
+    const containsMatches = [];
+
+    sorted.forEach(char => {
+        const normalizedName = normalizeMentionSearchText(char.name);
+        if (normalizedName.startsWith(normalizedQuery)) {
+            startsWithMatches.push(char);
+        } else if (normalizedName.includes(normalizedQuery)) {
+            containsMatches.push(char);
+        }
+    });
+
+    return [...startsWithMatches, ...containsMatches];
+}
+
+function closeMentionDropdown() {
+    chatState.mentionMenuOpen = false;
+    chatState.mentionTriggerStart = -1;
+    chatState.mentionQuery = '';
+    chatState.mentionFilteredCharacters = [];
+    chatState.mentionSelectedIndex = 0;
+    if (mentionDropdown) {
+        mentionDropdown.classList.add('hidden');
+        mentionDropdown.innerHTML = '';
+    }
+}
+
+function renderMentionDropdown() {
+    if (!mentionDropdown) return;
+
+    const items = chatState.mentionFilteredCharacters;
+    if (!chatState.mentionMenuOpen || !items.length) {
+        mentionDropdown.classList.add('hidden');
+        mentionDropdown.innerHTML = '';
+        return;
+    }
+
+    chatState.mentionSelectedIndex = Math.max(0, Math.min(chatState.mentionSelectedIndex, items.length - 1));
+
+    const header = document.createElement('div');
+    header.className = 'mention-dropdown-header';
+    header.textContent = chatState.mentionQuery
+        ? `Personagens (${items.length})`
+        : `Mencionar personagem na sala (${items.length})`;
+
+    const fragment = document.createDocumentFragment();
+    fragment.appendChild(header);
+
+    items.forEach((char, index) => {
+        const isActive = index === chatState.mentionSelectedIndex;
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = `mention-option${isActive ? ' is-active' : ''}`;
+        option.setAttribute('role', 'option');
+        option.setAttribute('aria-selected', String(isActive));
+        option.dataset.characterId = char.id;
+
+        const statusLabel = char.ownerId === chatState.currentUser.id
+            ? 'Seu personagem'
+            : (char.ownerId ? `Com ${char.ownerName || 'outro jogador'}` : 'Livre na sala');
+
+        const avatarHTML = char.avatar
+            ? `<img class="mention-option-avatar" src="${escapeHtml(char.avatar)}" alt="${escapeHtml(char.name)}">`
+            : `<span class="mention-option-avatar" style="color:${escapeHtml(char.color || '#c084fc')};border-color:${escapeHtml(char.color || '#9d4edd')};">${escapeHtml(char.initials)}</span>`;
+
+        option.innerHTML = `
+            ${avatarHTML}
+            <span class="mention-option-info">
+                <span class="mention-option-name">${escapeHtml(char.name)}</span>
+                <span class="mention-option-status">${escapeHtml(statusLabel)}</span>
+            </span>
+            <span class="mention-option-at">@${escapeHtml(char.name.split(' ')[0])}</span>
+        `;
+
+        option.addEventListener('pointerdown', event => {
+            event.preventDefault();
+            selectMentionCharacter(char);
+        });
+
+        fragment.appendChild(option);
+    });
+
+    mentionDropdown.replaceChildren(fragment);
+    mentionDropdown.classList.remove('hidden');
+
+    const activeOption = mentionDropdown.querySelector('.mention-option.is-active');
+    activeOption?.scrollIntoView({ block: 'nearest' });
+}
+
+function updateMentionAutocomplete() {
+    if (!chatInput || !mentionDropdown) return;
+
+    if (!chatState.roomCharacters.length) {
+        closeMentionDropdown();
+        return;
+    }
+
+    const value = chatInput.value;
+    const cursor = chatInput.selectionStart ?? value.length;
+    const textBeforeCursor = value.slice(0, cursor);
+
+    const triggerMatch = textBeforeCursor.match(/(?:^|\s)@([^\s@][^@]{0,40}|)$/);
+    if (!triggerMatch) {
+        closeMentionDropdown();
+        return;
+    }
+
+    const query = triggerMatch[1] ?? '';
+    const triggerStart = textBeforeCursor.lastIndexOf('@');
+    const filtered = getFilteredMentionCharacters(query);
+
+    if (!filtered.length) {
+        closeMentionDropdown();
+        return;
+    }
+
+    const queryChanged = chatState.mentionQuery !== query || chatState.mentionTriggerStart !== triggerStart;
+    chatState.mentionMenuOpen = true;
+    chatState.mentionTriggerStart = triggerStart;
+    chatState.mentionQuery = query;
+    chatState.mentionFilteredCharacters = filtered;
+    if (queryChanged) {
+        chatState.mentionSelectedIndex = 0;
+    }
+
+    renderMentionDropdown();
+}
+
+function selectMentionCharacter(character) {
+    if (!chatInput || !character) return;
+
+    const value = chatInput.value;
+    const cursor = chatInput.selectionStart ?? value.length;
+    const start = chatState.mentionTriggerStart >= 0 ? chatState.mentionTriggerStart : cursor;
+
+    const before = value.slice(0, start);
+    const after = value.slice(cursor);
+    const spacer = after.startsWith(' ') ? '' : ' ';
+    const insertion = `@${character.name}${spacer}`;
+    const nextValue = `${before}${insertion}${after}`;
+    const nextCursor = before.length + insertion.length;
+
+    chatInput.value = nextValue;
+    chatInput.focus();
+    chatInput.setSelectionRange(nextCursor, nextCursor);
+    closeMentionDropdown();
+    updateTypingState();
+}
+
 function appendMessageToUI(msg, { container = chatMessagesContainer, skipScroll = false } = {}) {
     if (!container) return;
     if (msg.id) {
@@ -1674,7 +1963,7 @@ function appendMessageToUI(msg, { container = chatMessagesContainer, skipScroll 
     const time = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const char = msg.characters;
     const isDeleted = Boolean(msg.deleted_at);
-    const messageText = isDeleted ? 'Esta mensagem foi apagada' : escapeHtml(msg.content);
+    const messageText = isDeleted ? 'Esta mensagem foi apagada' : formatMessageContentWithMentions(msg.content);
 
     const msgElement = document.createElement('div');
     if (msg.id) msgElement.dataset.messageId = String(msg.id);
@@ -1826,6 +2115,14 @@ function showCharacterProfile(characterId) {
 
 if (chatMessagesContainer) {
     chatMessagesContainer.addEventListener('click', event => {
+        const mentionEl = event.target.closest('.character-mention[data-mention-character-id]');
+        if (mentionEl) {
+            event.preventDefault();
+            event.stopPropagation();
+            focusCharacterInRoomList(mentionEl.dataset.mentionCharacterId);
+            return;
+        }
+
         const avatarButton = event.target.closest('.message-avatar-button');
         if (avatarButton) showCharacterProfile(avatarButton.dataset.characterId);
 
@@ -1838,6 +2135,14 @@ if (chatMessagesContainer) {
             target?.classList.add('message-reply-highlight');
             setTimeout(() => target?.classList.remove('message-reply-highlight'), 1200);
         }
+    });
+
+    chatMessagesContainer.addEventListener('keydown', event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const mentionEl = event.target.closest('.character-mention[data-mention-character-id]');
+        if (!mentionEl) return;
+        event.preventDefault();
+        focusCharacterInRoomList(mentionEl.dataset.mentionCharacterId);
     });
 
     chatMessagesContainer.addEventListener('contextmenu', event => {
@@ -1894,6 +2199,7 @@ function clearReplyTarget() {
 if (replyComposerCancel) replyComposerCancel.addEventListener('click', clearReplyTarget);
 document.addEventListener('click', event => {
     if (!event.target.closest('#message-action-menu')) closeMessageActionMenu();
+    if (!event.target.closest('#mention-dropdown') && event.target !== chatInput) closeMentionDropdown();
 });
 
 async function deleteOwnMessage(message) {
@@ -2622,6 +2928,7 @@ async function confirmAddCharacters() {
     closeAddCharacterModal();
     renderDeck();
     updateInputUI();
+    refreshMessageMentionsInDOM();
     if (changed) await broadcastRoomCharactersChanged();
 }
 
@@ -2765,6 +3072,7 @@ async function excluirPersonagem(charId) {
         if (chatState.activeCharacterId === charId) chatState.activeCharacterId = null;
         renderDeck();
         updateInputUI();
+        refreshMessageMentionsInDOM();
         if (data?.length) await broadcastRoomCharactersChanged();
     } else {
         console.error('Falha ao remover personagem da sala:', error);
@@ -2805,6 +3113,8 @@ if (toggleEncenacao) {
 async function sendMessage() {
     const content = chatInput.value.trim();
     if (!content || !chatState.roomId) return;
+
+    closeMentionDropdown();
 
     const activeChar = chatState.roomCharacters.find(
         c => c.id === chatState.activeCharacterId && c.ownerId === chatState.currentUser.id
@@ -2866,8 +3176,18 @@ async function sendMessage() {
 }
 
 if (chatInput) {
-    chatInput.addEventListener('input', updateTypingState);
+    chatInput.addEventListener('input', () => {
+        updateTypingState();
+        updateMentionAutocomplete();
+    });
+    chatInput.addEventListener('click', updateMentionAutocomplete);
+    chatInput.addEventListener('keyup', event => {
+        if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+            updateMentionAutocomplete();
+        }
+    });
     chatInput.addEventListener('focus', () => {
+        updateMentionAutocomplete();
         setTimeout(() => {
             syncMobileViewport();
             window.scrollTo(0, 0);
@@ -2877,9 +3197,38 @@ if (chatInput) {
     chatInput.addEventListener('blur', () => {
         clearTimeout(chatState.typingStopTimer);
         sendTypingEvent(false);
-        setTimeout(syncMobileViewport, 300);
+        setTimeout(() => {
+            closeMentionDropdown();
+            syncMobileViewport();
+        }, 180);
     });
     chatInput.addEventListener('keydown', async (e) => {
+        if (chatState.mentionMenuOpen && chatState.mentionFilteredCharacters.length) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                chatState.mentionSelectedIndex = (chatState.mentionSelectedIndex + 1) % chatState.mentionFilteredCharacters.length;
+                renderMentionDropdown();
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                chatState.mentionSelectedIndex = (chatState.mentionSelectedIndex - 1 + chatState.mentionFilteredCharacters.length) % chatState.mentionFilteredCharacters.length;
+                renderMentionDropdown();
+                return;
+            }
+            if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                const selected = chatState.mentionFilteredCharacters[chatState.mentionSelectedIndex];
+                if (selected) selectMentionCharacter(selected);
+                return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeMentionDropdown();
+                return;
+            }
+        }
+
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             await sendMessage();
