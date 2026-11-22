@@ -75,7 +75,6 @@ const countedUnreadMessageIds = new Set();
 let notificationAudioCtx = null;
 let lastNotificationSoundAt = 0;
 let notificationPermissionRequested = false;
-let audioUnlocked = false;
 
 function getNotificationAudioContext() {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -94,35 +93,16 @@ function requestBrowserNotificationPermission() {
     }
 }
 
-function unlockNotificationAudio() {
+function handleFirstUserInteraction() {
     const ctx = getNotificationAudioContext();
-    if (!ctx) return;
-
-    if (ctx.state === 'suspended') {
+    if (ctx && ctx.state === 'suspended') {
         ctx.resume().catch(() => {});
     }
-
-    // Dispara um pulso silencioso de 1 sample dentro do gesto do usuário (exigência do Firefox)
-    if (!audioUnlocked && ctx.state === 'running') {
-        try {
-            const buffer = ctx.createBuffer(1, 1, 22050);
-            const source = ctx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(ctx.destination);
-            source.start(0);
-            audioUnlocked = true;
-        } catch {}
-    }
-}
-
-function handleFirstUserInteraction() {
-    unlockNotificationAudio();
     requestBrowserNotificationPermission();
 }
 
-// Firefox exige 'click' ou 'keydown' (ignora 'pointerdown' para Notification e AudioContext)
-['click', 'keydown'].forEach(eventName => {
-    window.addEventListener(eventName, handleFirstUserInteraction, { capture: true, passive: true });
+['pointerdown', 'keydown', 'touchstart'].forEach(eventName => {
+    window.addEventListener(eventName, handleFirstUserInteraction, { passive: true });
 });
 
 function isPageInBackground() {
@@ -203,10 +183,8 @@ async function playNewMessageChime() {
         }
     }
 
-    if (ctx.state !== 'running') return;
-
     lastNotificationSoundAt = nowMs;
-    const start = ctx.currentTime + 0.02;
+    const start = ctx.currentTime + 0.015;
 
     // Arpejo harmônico cristalino (A5 -> C#6 -> E6) com brilho suave e cauda ressonante
     const notes = [
