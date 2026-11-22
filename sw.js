@@ -1,4 +1,4 @@
-const CACHE_NAME = 'theglobe-pwa-v1';
+const CACHE_NAME = 'theglobe-pwa-v2';
 
 const APP_SHELL = [
   '/',
@@ -20,7 +20,9 @@ const APP_SHELL = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.allSettled(APP_SHELL.map((url) => cache.add(url)))
+    )
   );
   self.skipWaiting();
 });
@@ -41,7 +43,6 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const { request } = event;
 
-  // Ignora métodos diferentes de GET e domínios externos (Firebase, Supabase, APIs, mídia)
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
