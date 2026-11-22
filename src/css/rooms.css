@@ -5,6 +5,8 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
     margin-bottom: 2rem;
     padding-bottom: 1.5rem;
     border-bottom: 1px solid var(--border-color);
@@ -22,6 +24,29 @@
     color: var(--text-muted);
 }
 
+.rooms-header-actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.join-room-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.invite-code-field {
+    width: 126px;
+    text-transform: uppercase;
+    text-align: center;
+    letter-spacing: 1.5px;
+    font-weight: 600;
+    margin-bottom: 0;
+    padding: 0.58rem 0.65rem;
+}
+
 .btn-primary {
     background-color: var(--primary-purple);
     color: white;
@@ -32,6 +57,7 @@
     font-size: 0.9rem;
     cursor: pointer;
     transition: background-color 0.2s, transform 0.1s;
+    white-space: nowrap;
 }
 
 .btn-primary:hover {
@@ -45,6 +71,7 @@
 .notifications-tab {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 0.55rem;
     padding: 0.58rem 0.9rem;
     color: #d4d4d8;
@@ -56,6 +83,7 @@
     font-weight: 600;
     cursor: pointer;
     transition: border-color 0.2s, background 0.2s, color 0.2s;
+    white-space: nowrap;
 }
 
 .notifications-tab:hover,
@@ -173,7 +201,6 @@
 ========================================= */
 .rooms-grid {
     display: grid;
-    /* Ajusta os cards automaticamente conforme o espaço da tela */
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 1.5rem;
 }
@@ -304,6 +331,11 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 0.75rem;
+}
+
+.room-text {
+    min-width: 0;
 }
 
 .room-text h3 {
@@ -311,6 +343,9 @@
     font-weight: 600;
     color: var(--text-light);
     margin-bottom: 0.25rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .room-text p {
@@ -325,6 +360,7 @@
     border-radius: 8px;
     width: 36px;
     height: 36px;
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -353,8 +389,6 @@
 /* =========================================
    MODAL NOVA SALA (Específicos)
 ========================================= */
-
-/* Sobrescreve largura e alinhamento do modal padrão para este formulário */
 .room-modal-wide {
     max-width: 600px;
     text-align: left;
@@ -365,7 +399,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 2rem;
+    margin-bottom: 1.5rem;
 }
 
 .modal-title-left {
@@ -428,14 +462,14 @@
 .upload-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 1.5rem;
+    gap: 1.25rem;
     margin-bottom: 1.5rem;
 }
 
 .upload-dropzone {
     border: 1.5px dashed var(--border-color);
     border-radius: 12px;
-    background: rgba(26, 28, 35, 0.5); /* Levemente mais escuro que o painel */
+    background: rgba(26, 28, 35, 0.5);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -444,7 +478,7 @@
     transition: all 0.2s ease;
     padding: 1rem;
     text-align: center;
-    height: 140px; /* Altura fixa para manter os dois iguais, flex cuidará do conteúdo */
+    height: 140px;
 }
 
 .upload-dropzone:hover {
@@ -477,7 +511,7 @@
     border: 1px solid var(--border-color);
     border-radius: 12px;
     padding: 1.25rem;
-    margin-bottom: 2rem;
+    margin-bottom: 1.75rem;
 }
 
 .mode-item {
@@ -541,10 +575,36 @@
 }
 
 /* Rodapé de Ações */
+.modal-actions-wrapper {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
 .modal-actions-right {
     display: flex;
     justify-content: flex-end;
-    gap: 1rem;
+    gap: 0.75rem;
+}
+
+.btn-danger-outline {
+    color: #ff4d4f;
+    background: rgba(255, 77, 79, 0.1);
+    border: 1px solid #ff4d4f;
+    padding: 0.6rem 1.2rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    font-family: inherit;
+    font-size: 0.875rem;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.btn-danger-outline:hover {
+    background: rgba(255, 77, 79, 0.2);
 }
 
 .btn-secondary {
@@ -557,6 +617,7 @@
     font-size: 0.9rem;
     cursor: pointer;
     transition: all 0.2s ease;
+    white-space: nowrap;
 }
 
 .btn-secondary:hover {
