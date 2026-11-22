@@ -1,4 +1,4 @@
-const CACHE_NAME = 'theglobe-pwa-v2';
+const CACHE_NAME = 'theglobe-pwa-v3';
 
 const APP_SHELL = [
   '/',
@@ -9,6 +9,7 @@ const APP_SHELL = [
   '/chat.html',
   '/manifest.json',
   '/src/css/global.css',
+  '/src/css/auth.css',
   '/src/css/brand.css',
   '/src/css/scrollbars.css',
   '/src/css/responsive.css',
