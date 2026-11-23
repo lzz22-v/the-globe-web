@@ -10,6 +10,7 @@ const PALETTE_COLORS = [
 
 // Mapeamento dos elementos da página
 const grid = document.getElementById('character-grid');
+const walletLoading = document.getElementById('wallet-loading');
 const characterCount = document.getElementById('character-count');
 const btnCreate = document.getElementById('btn-create-character');
 const btnCreateFolder = document.getElementById('btn-create-folder');
@@ -91,8 +92,13 @@ async function init() {
 
     renderPalette();
     setupDropzone();
-    // OTIMIZAÇÃO: Carrega pastas e personagens em paralelo
-    await Promise.all([loadFolders(), loadCharacters()]);
+    walletLoading?.classList.remove('hidden');
+    try {
+        await Promise.all([loadFolders(), loadCharacters()]);
+        renderCharacters();
+    } finally {
+        walletLoading?.classList.add('hidden');
+    }
 }
 
 async function loadFolders() {

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'theglobe-pwa-v3';
+const CACHE_NAME = 'theglobe-pwa-v4';
 
 const APP_SHELL = [
   '/',

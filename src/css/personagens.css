@@ -35,6 +35,49 @@ body {
     display: none !important;
 }
 
+.character-wallet-progress {
+    width: min(100%, 560px);
+    min-height: 76px;
+    max-height: 100px;
+    margin: 2rem auto;
+    padding: 1.25rem 1.5rem;
+    display: grid;
+    grid-template-rows: auto 7px;
+    align-content: center;
+    gap: 0.8rem;
+    overflow: hidden;
+    color: var(--text-muted);
+    background-color: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+}
+
+.character-wallet-progress-track {
+    position: relative;
+    display: block;
+    height: 7px;
+    width: 100%;
+    overflow: hidden;
+    border-radius: 999px;
+    background-color: var(--input-bg);
+}
+
+.character-wallet-progress-track > span {
+    display: block;
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 38%;
+    height: 100%;
+    border-radius: inherit;
+    background-color: var(--primary-purple);
+    animation: wallet-loading-progress 1.2s ease-in-out infinite;
+}
+
+@keyframes wallet-loading-progress {
+    from { transform: translateX(-110%); }
+    to { transform: translateX(300%); }
+}
+
 /* ================= SIDEBAR ================= */
 .sidebar {
     width: 260px;

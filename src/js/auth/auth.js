@@ -215,7 +215,7 @@ supabase.auth.getSession().then(({ data }) => {
 });
 
 supabase.auth.onAuthStateChange((event, session) => {
-    if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session) {
+    if (session && ['SIGNED_IN', 'INITIAL_SESSION', 'TOKEN_REFRESHED'].includes(event)) {
         window.location.replace('profile.html');
     }
 });

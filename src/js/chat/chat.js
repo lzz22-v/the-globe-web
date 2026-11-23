@@ -81,6 +81,8 @@ const chatState = {
     presenceChannel: null,
     hostUserId: null,
     isHost: false,
+    mediaBroadcasterId: null,
+    isMediaBroadcaster: false,
     mediaChannel: null,
     mediaRealtimeConnected: false,
     mediaRealtimeError: false,
@@ -388,7 +390,7 @@ function setupPresence() {
                 });
             }
 
-            if (chatState.isHost) {
+            if (chatState.isMediaBroadcaster) {
                 for (const peerId of chatState.hostPeerConnections.keys()) {
                     if (!uniqueUsers.has(peerId)) {
                         closeHostPeerConnection(peerId);
@@ -397,6 +399,11 @@ function setupPresence() {
             }
 
             chatState.onlineUsers = uniqueUsers;
+            if (chatState.isMediaBroadcaster && chatState.activeMedia) {
+                for (const peerId of uniqueUsers.keys()) {
+                    if (peerId !== chatState.currentUser.id) createOfferForViewer(peerId);
+                }
+            }
             updatePresenceUI();
             updateMessageAvatars();
             updateMessageSenderNames();
@@ -490,9 +497,9 @@ async function loadRoomDetails() {
     if (room && !error) {
         chatState.hostUserId = room.created_by;
         chatState.isHost = room.created_by === chatState.currentUser.id;
-        if (hostMediaControls) hostMediaControls.classList.toggle('hidden', !chatState.isHost);
-        if (mediaControlsToggle) mediaControlsToggle.classList.toggle('hidden', !chatState.isHost);
-        if (chatState.isHost) renderLocalMediaLibrary();
+        if (hostMediaControls) hostMediaControls.classList.remove('hidden');
+        if (mediaControlsToggle) mediaControlsToggle.classList.remove('hidden');
+        renderLocalMediaLibrary();
         if (roomTitle) roomTitle.textContent = room.title;
         
         if (roomInviteCode) {
@@ -574,7 +581,7 @@ function syncGlobePlayerControlsUI() {
 
     const isPaused = mediaBroadcastVideo.paused;
     mediaBroadcast.classList.toggle('is-paused', isPaused);
-    mediaBroadcast.classList.toggle('is-viewer', !chatState.isHost);
+    mediaBroadcast.classList.toggle('is-viewer', !chatState.isMediaBroadcaster);
 
     if (globeBtnPlayPause) {
         globeBtnPlayPause.innerHTML = isPaused ? ICONS.playerPlay : ICONS.playerPause;
@@ -623,7 +630,7 @@ function syncGlobePlayerControlsUI() {
 }
 
 function scrubGlobePlayerToClientX(clientX) {
-    if (!chatState.isHost || !globePlayerScrubber || !mediaBroadcastVideo) return;
+    if (!chatState.isMediaBroadcaster || !globePlayerScrubber || !mediaBroadcastVideo) return;
     const duration = mediaBroadcastVideo.duration;
     if (!Number.isFinite(duration) || duration <= 0) return;
 
@@ -645,7 +652,7 @@ function setupGlobePlayerInteractions() {
     });
 
     const toggleHostPlayPause = () => {
-        if (!chatState.isHost) {
+        if (!chatState.isMediaBroadcaster) {
             revealGlobePlayerHud();
             return;
         }
@@ -662,14 +669,14 @@ function setupGlobePlayerInteractions() {
     globeBtnPlayPause?.addEventListener('click', toggleHostPlayPause);
 
     globeBtnRewind?.addEventListener('click', () => {
-        if (!chatState.isHost) return;
+        if (!chatState.isMediaBroadcaster) return;
         mediaBroadcastVideo.currentTime = Math.max(0, (mediaBroadcastVideo.currentTime || 0) - 10);
         syncGlobePlayerControlsUI();
         revealGlobePlayerHud();
     });
 
     globeBtnForward?.addEventListener('click', () => {
-        if (!chatState.isHost) return;
+        if (!chatState.isMediaBroadcaster) return;
         const maxTime = Number.isFinite(mediaBroadcastVideo.duration) ? mediaBroadcastVideo.duration : Infinity;
         mediaBroadcastVideo.currentTime = Math.min(maxTime, (mediaBroadcastVideo.currentTime || 0) + 10);
         syncGlobePlayerControlsUI();
@@ -706,7 +713,7 @@ function setupGlobePlayerInteractions() {
 
     if (globePlayerScrubber) {
         globePlayerScrubber.addEventListener('pointerdown', (e) => {
-            if (!chatState.isHost) return;
+            if (!chatState.isMediaBroadcaster) return;
             chatState.isScrubbingTimeline = true;
             globePlayerScrubber.setPointerCapture?.(e.pointerId);
             scrubGlobePlayerToClientX(e.clientX);
@@ -746,7 +753,7 @@ function setMediaPreloadProgressUI({ visible, percent = 0, label = '' }) {
 }
 
 function renderLocalMediaLibrary() {
-    if (!chatState.isHost || !mediaLibrary) return;
+    if (!mediaLibrary) return;
     const previous = mediaLibrary.value;
     mediaLibrary.replaceChildren(
         new Option(chatState.mediaAssets.length ? 'Selecione um vídeo' : 'Nenhum vídeo adicionado', '')
@@ -765,12 +772,12 @@ function renderLocalMediaLibrary() {
 function updateMediaButtons() {
     const selectedAsset = chatState.mediaAssets.find(asset => asset.id === mediaLibrary?.value);
     const isReady = Boolean(selectedAsset && selectedAsset.ready);
-    if (btnAddMedia) btnAddMedia.disabled = !chatState.isHost || chatState.isPreloadingMedia;
+    if (btnAddMedia) btnAddMedia.disabled = chatState.isPreloadingMedia;
     if (btnBroadcastMedia) {
-        btnBroadcastMedia.disabled = !chatState.isHost || !isReady || chatState.isPreloadingMedia || !chatState.mediaRealtimeConnected;
+        btnBroadcastMedia.disabled = !isReady || chatState.isPreloadingMedia || !chatState.mediaRealtimeConnected;
     }
     if (btnDeleteMedia) {
-        btnDeleteMedia.disabled = !chatState.isHost || !selectedAsset || chatState.isPreloadingMedia;
+        btnDeleteMedia.disabled = !selectedAsset || chatState.isPreloadingMedia;
     }
     if (mediaChannelStatus) {
         mediaChannelStatus.textContent = chatState.mediaRealtimeError
@@ -850,7 +857,7 @@ function warmupVideoMetadataAndFirstFrame(blobUrl) {
 }
 
 async function addLocalMediaFiles(files) {
-    if (!chatState.isHost || !files?.length || chatState.isPreloadingMedia) return;
+    if (!files?.length || chatState.isPreloadingMedia) return;
 
     const videoFiles = Array.from(files).filter(file => file.type.startsWith('video/'));
     if (!videoFiles.length) return;
@@ -1099,8 +1106,11 @@ function preferCompatibleVideoCodecs(pc) {
 }
 
 async function createOfferForViewer(viewerId) {
-    if (!chatState.isHost || !chatState.activeMedia || !chatState.localMediaStream) return;
+    if (!chatState.isMediaBroadcaster || !chatState.activeMedia || !chatState.localMediaStream) return;
     if (!viewerId || viewerId === chatState.currentUser.id) return;
+
+    const existingConnection = chatState.hostPeerConnections.get(viewerId);
+    if (existingConnection && !['failed', 'closed'].includes(existingConnection.connectionState)) return;
 
     closeHostPeerConnection(viewerId);
 
@@ -1142,12 +1152,13 @@ async function createOfferForViewer(viewerId) {
 }
 
 async function handleViewerOffer(payload) {
-    if (chatState.isHost) return;
-    if (payload.from_id !== chatState.hostUserId) return;
+    if (chatState.isMediaBroadcaster) return;
+    if (!payload.from_id || payload.from_id === chatState.currentUser.id) return;
     if (payload.to_id && payload.to_id !== chatState.currentUser.id) return;
     if (!payload.sdp || !mediaBroadcast || !mediaBroadcastVideo) return;
 
     closeViewerPeerConnection();
+    chatState.mediaBroadcasterId = payload.from_id;
 
     const pc = new RTCPeerConnection(RTC_ICE_CONFIG);
     chatState.viewerPeerConnection = pc;
@@ -1197,7 +1208,7 @@ async function handleViewerOffer(payload) {
     pc.onicecandidate = ({ candidate }) => {
         if (candidate) {
             sendMediaSignal('webrtc_ice', {
-                to_id: chatState.hostUserId,
+                to_id: chatState.mediaBroadcasterId,
                 candidate: candidate.toJSON()
             });
         }
@@ -1220,7 +1231,7 @@ async function handleViewerOffer(payload) {
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         await sendMediaSignal('webrtc_answer', {
-            to_id: chatState.hostUserId,
+            to_id: chatState.mediaBroadcasterId,
             sdp: pc.localDescription
         });
     } catch (error) {
@@ -1230,7 +1241,7 @@ async function handleViewerOffer(payload) {
 }
 
 async function handleHostAnswer(payload) {
-    if (!chatState.isHost) return;
+    if (!chatState.isMediaBroadcaster) return;
     if (payload.to_id && payload.to_id !== chatState.currentUser.id) return;
     const pc = chatState.hostPeerConnections.get(payload.from_id);
     if (!pc || !payload.sdp) return;
@@ -1251,7 +1262,7 @@ async function handleIceCandidate(payload) {
     if (payload.to_id && payload.to_id !== chatState.currentUser.id) return;
     if (!payload.candidate) return;
 
-    if (chatState.isHost) {
+    if (chatState.isMediaBroadcaster) {
         const pc = chatState.hostPeerConnections.get(payload.from_id);
         if (pc && pc.remoteDescription) {
             await pc.addIceCandidate(new RTCIceCandidate(payload.candidate)).catch(() => {});
@@ -1260,7 +1271,7 @@ async function handleIceCandidate(payload) {
             list.push(payload.candidate);
             chatState.pendingHostIceCandidates.set(payload.from_id, list);
         }
-    } else if (payload.from_id === chatState.hostUserId) {
+    } else if (payload.from_id === chatState.mediaBroadcasterId) {
         const pc = chatState.viewerPeerConnection;
         if (pc && pc.remoteDescription) {
             await pc.addIceCandidate(new RTCIceCandidate(payload.candidate)).catch(() => {});
@@ -1278,15 +1289,17 @@ function setupMediaBroadcast() {
 
     chatState.mediaChannel
         .on('broadcast', { event: 'webrtc_join' }, ({ payload }) => {
-            if (!payload || !chatState.isHost || !chatState.activeMedia) return;
-            if (payload.from_id && payload.from_id !== chatState.currentUser.id) {
+            if (!payload || !chatState.isMediaBroadcaster || !chatState.activeMedia) return;
+            if (payload.to_id === chatState.currentUser.id && payload.from_id && payload.from_id !== chatState.currentUser.id) {
                 createOfferForViewer(payload.from_id);
             }
         })
         .on('broadcast', { event: 'webrtc_live' }, ({ payload }) => {
-            if (!payload || chatState.isHost) return;
-            if (payload.from_id === chatState.hostUserId) {
-                sendMediaSignal('webrtc_join', { to_id: chatState.hostUserId });
+            if (!payload || payload.from_id === chatState.currentUser.id || chatState.isMediaBroadcaster) return;
+            if (chatState.mediaBroadcasterId && chatState.mediaBroadcasterId !== payload.from_id) return;
+            if (payload.from_id) {
+                chatState.mediaBroadcasterId = payload.from_id;
+                sendMediaSignal('webrtc_join', { to_id: payload.from_id });
             }
         })
         .on('broadcast', { event: 'webrtc_offer' }, ({ payload }) => {
@@ -1299,8 +1312,8 @@ function setupMediaBroadcast() {
             if (payload) handleIceCandidate(payload);
         })
         .on('broadcast', { event: 'webrtc_stop' }, ({ payload }) => {
-            if (!payload || chatState.isHost) return;
-            if (payload.from_id === chatState.hostUserId) {
+            if (!payload || chatState.isMediaBroadcaster) return;
+            if (payload.from_id === chatState.mediaBroadcasterId) {
                 closeMediaBroadcast(false);
             }
         })
@@ -1310,10 +1323,10 @@ function setupMediaBroadcast() {
                 chatState.mediaRealtimeError = false;
                 updateMediaButtons();
 
-                if (chatState.isHost && chatState.activeMedia) {
+                if (chatState.isMediaBroadcaster && chatState.activeMedia) {
                     sendMediaSignal('webrtc_live', { title: chatState.activeMedia.name });
-                } else if (!chatState.isHost && chatState.hostUserId) {
-                    sendMediaSignal('webrtc_join', { to_id: chatState.hostUserId });
+                } else if (!chatState.isMediaBroadcaster) {
+                    sendMediaSignal('webrtc_join', { to_id: chatState.mediaBroadcasterId });
                 }
             }
             if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
@@ -1336,7 +1349,7 @@ function showAutoplayFallback() {
 }
 
 async function startMediaBroadcast() {
-    if (!chatState.isHost || chatState.isPreloadingMedia) return;
+    if (chatState.isPreloadingMedia) return;
     if (!chatState.mediaRealtimeConnected) {
         alert('Aguarde a conexão do canal da sala para iniciar a transmissão.');
         return;
@@ -1344,6 +1357,8 @@ async function startMediaBroadcast() {
 
     const asset = chatState.mediaAssets.find(item => item.id === mediaLibrary?.value);
     if (!asset || !asset.ready) return;
+
+    closeViewerPeerConnection();
 
     if (chatState.activeMedia) {
         closeAllHostPeerConnections();
@@ -1358,6 +1373,8 @@ async function startMediaBroadcast() {
     }
 
     chatState.activeMedia = asset;
+    chatState.mediaBroadcasterId = chatState.currentUser.id;
+    chatState.isMediaBroadcaster = true;
     mediaBroadcastVideo.srcObject = null;
     mediaBroadcastVideo.src = asset.url;
     mediaBroadcastVideo.controls = false;
@@ -1392,11 +1409,6 @@ async function startMediaBroadcast() {
 
     chatState.localMediaStream = stream;
 
-    for (const userId of chatState.onlineUsers.keys()) {
-        if (userId !== chatState.currentUser.id) {
-            createOfferForViewer(userId);
-        }
-    }
     await sendMediaSignal('webrtc_live', { title: asset.name });
 
     if (mediaBroadcast.requestFullscreen) {
@@ -1405,12 +1417,14 @@ async function startMediaBroadcast() {
 }
 
 async function closeMediaBroadcast(notify = false) {
-    if (notify && chatState.isHost && chatState.mediaChannel && chatState.mediaRealtimeConnected) {
+    if (notify && chatState.isMediaBroadcaster && chatState.mediaChannel && chatState.mediaRealtimeConnected) {
         await sendMediaSignal('webrtc_stop', {});
     }
 
     clearTimeout(chatState.playerHudTimer);
     chatState.activeMedia = null;
+    chatState.isMediaBroadcaster = false;
+    chatState.mediaBroadcasterId = null;
     closeAllHostPeerConnections();
     closeViewerPeerConnection();
 
@@ -1442,7 +1456,7 @@ async function closeMediaBroadcast(notify = false) {
 
 setupGlobePlayerInteractions();
 
-if (btnAddMedia) btnAddMedia.addEventListener('click', () => chatState.isHost && !chatState.isPreloadingMedia && mediaFileInput?.click());
+if (btnAddMedia) btnAddMedia.addEventListener('click', () => !chatState.isPreloadingMedia && mediaFileInput?.click());
 if (mediaFileInput) mediaFileInput.addEventListener('change', async () => {
     const selectedFiles = mediaFileInput.files ? Array.from(mediaFileInput.files) : [];
     mediaFileInput.value = '';
@@ -1460,7 +1474,7 @@ if (mediaControlsToggle) mediaControlsToggle.addEventListener('click', () => {
 });
 if (btnBroadcastMedia) btnBroadcastMedia.addEventListener('click', startMediaBroadcast);
 if (btnDeleteMedia) btnDeleteMedia.addEventListener('click', async () => {
-    if (!chatState.isHost || chatState.isPreloadingMedia) return;
+    if (chatState.isPreloadingMedia) return;
     const index = chatState.mediaAssets.findIndex(item => item.id === mediaLibrary.value);
     if (index === -1) return;
     const [removed] = chatState.mediaAssets.splice(index, 1);
@@ -1470,7 +1484,7 @@ if (btnDeleteMedia) btnDeleteMedia.addEventListener('click', async () => {
     if (removed.url) URL.revokeObjectURL(removed.url);
     renderLocalMediaLibrary();
 });
-if (btnStopMedia) btnStopMedia.addEventListener('click', () => chatState.isHost && closeMediaBroadcast(true));
+if (btnStopMedia) btnStopMedia.addEventListener('click', () => chatState.isMediaBroadcaster && closeMediaBroadcast(true));
 if (btnEnableMediaAudio) btnEnableMediaAudio.addEventListener('click', async () => {
     chatState.mediaMutedForAutoplay = false;
     mediaBroadcastVideo.muted = false;
@@ -1481,7 +1495,7 @@ if (btnEnableMediaAudio) btnEnableMediaAudio.addEventListener('click', async () 
 });
 if (mediaBroadcastVideo) {
     mediaBroadcastVideo.addEventListener('ended', () => {
-        if (chatState.isHost && chatState.activeMedia) {
+        if (chatState.isMediaBroadcaster && chatState.activeMedia) {
             closeMediaBroadcast(true);
         }
     });
@@ -1770,7 +1784,7 @@ async function resetRoomToInitialSnapshot() {
 function setupPageLifecycleReset() {
     window.addEventListener('pagehide', () => {
         markCurrentRoomAsViewed();
-        closeMediaBroadcast(chatState.isHost);
+        closeMediaBroadcast(chatState.isMediaBroadcaster);
         clearLocalMediaAssets();
         chatState.wasHiddenOrLeft = true;
         clearRoomTransientState();
@@ -1778,7 +1792,7 @@ function setupPageLifecycleReset() {
 
     window.addEventListener('beforeunload', () => {
         markCurrentRoomAsViewed();
-        closeMediaBroadcast(chatState.isHost);
+        closeMediaBroadcast(chatState.isMediaBroadcaster);
         clearLocalMediaAssets();
         chatState.wasHiddenOrLeft = true;
         clearRoomTransientState();

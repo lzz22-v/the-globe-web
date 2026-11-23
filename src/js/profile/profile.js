@@ -165,63 +165,35 @@ async function initProfile() {
         return;
     }
 
-    const authCode = searchParams.get('code');
-    const hasImplicitToken = hashParams.has('access_token');
+    const hasOAuthCallback = searchParams.has('code') || hashParams.has('access_token') || hashParams.has('error');
+    let settled = false;
+    let timeout = null;
+    let subscription;
+    const finish = session => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        subscription?.unsubscribe();
+        if (session) renderProfile(session);
+        else window.location.replace('index.html');
+    };
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-        if (session && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED')) {
-            subscription.unsubscribe();
-            renderProfile(session);
-        }
+    // Supabase detectSessionInUrl already exchanges the OAuth code. Wait for that
+    // single callback instead of racing it with a second exchangeCodeForSession.
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+        if (session && ['SIGNED_IN', 'INITIAL_SESSION', 'TOKEN_REFRESHED'].includes(event)) finish(session);
     });
+    subscription = data.subscription;
 
-    // 1. Verifica se a sessão já foi estabelecida automaticamente pelo cliente
-    const { data: { session } } = await supabase.auth.getSession();
+    const { data: { session }, error } = await supabase.auth.getSession();
+    if (error) console.error('Erro ao recuperar a sessão:', error.message);
     if (session) {
-        subscription.unsubscribe();
-        renderProfile(session);
+        finish(session);
         return;
     }
+    if (settled) return;
 
-    // 2. Se voltou do Google com ?code= (PKCE) e ainda não trocou, força a troca agora
-    if (authCode) {
-        const { data: exchanged, error: exchangeError } = await supabase.auth.exchangeCodeForSession(authCode);
-        if (exchanged?.session) {
-            subscription.unsubscribe();
-            renderProfile(exchanged.session);
-            return;
-        }
-        // Se o cliente já havia consumido o code em paralelo, reconsulta getSession()
-        const { data: { session: postExchangeSession } } = await supabase.auth.getSession();
-        if (postExchangeSession) {
-            subscription.unsubscribe();
-            renderProfile(postExchangeSession);
-            return;
-        }
-        if (exchangeError) {
-            console.error('Erro ao validar código OAuth:', exchangeError.message);
-        }
-    }
-
-    // 3. Caso venha via hash (#access_token=), aguarda a leitura do fragmento
-    if (hasImplicitToken) {
-        setTimeout(async () => {
-            if (profileRendered) return;
-            const { data: { session: lateSession } } = await supabase.auth.getSession();
-            subscription.unsubscribe();
-            if (lateSession) {
-                renderProfile(lateSession);
-            } else {
-                window.location.replace('index.html');
-            }
-        }, 3000);
-        return;
-    }
-
-    subscription.unsubscribe();
-    if (!profileRendered) {
-        window.location.replace('index.html');
-    }
+    timeout = setTimeout(() => finish(null), hasOAuthCallback ? 10000 : 2500);
 }
 
 // ==========================================
